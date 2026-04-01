@@ -51,9 +51,9 @@ python StartServer.py --reload
 2. **在Render创建Web Service**
    - 访问 [render.com](https://render.com)
    - 点击 "New +" → "Web Service"
-   - 连接GitHub仓库：`tianqiyuan520/ZhiJiReminder_Backend`
+   - 连接GitHub仓库：`tianqiyuan520/ZhiJiReminderBackend`
    - 使用以下配置：
-     - **Name**: `zhijixia-backend`
+     - **Name**: `zhijixiabackend`
      - **Region**: `Singapore (Southeast Asia)`
      - **Branch**: `main`
      - **Runtime**: `Python 3`
