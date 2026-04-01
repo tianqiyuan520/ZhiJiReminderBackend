@@ -5,56 +5,72 @@ from datetime import datetime
 import sqlite3
 import json
 import os
+import logging
 
 from app.models import HomeworkInfo, SaveReminderRequest, UserInfo, ImageUploadRequest
 from app.ocr import ocr_image
 from app.llm import parse_homework_info, analyze_homework as analyze_homework_ai
 
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="智记侠作业提醒API")
 
-# 跨域，允许小程序访问
+# 跨域配置
+# 生产环境应该指定具体的前端域名，这里暂时允许所有
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # 生产环境应替换为具体域名
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# 数据库配置
+DB_PATH = os.environ.get("DB_PATH", "zhi_ji_xia.db")
+
 # 初始化SQLite数据库
 def init_db():
-    conn = sqlite3.connect('zhi_ji_xia.db')
-    cursor = conn.cursor()
-    
-    # 创建用户表
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS users (
-        user_id TEXT PRIMARY KEY,
-        openid TEXT UNIQUE,
-        nick_name TEXT,
-        avatar_url TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
-    
-    # 创建提醒表
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS reminders (
-        id TEXT PRIMARY KEY,
-        user_id TEXT,
-        course TEXT NOT NULL,
-        content TEXT NOT NULL,
-        start_time TEXT,
-        deadline TEXT NOT NULL,
-        difficulty TEXT DEFAULT '中',
-        status TEXT DEFAULT 'pending',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users (user_id)
-    )
-    ''')
-    
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # 创建用户表
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id TEXT PRIMARY KEY,
+            openid TEXT UNIQUE,
+            nick_name TEXT,
+            avatar_url TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        
+        # 创建提醒表
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS reminders (
+            id TEXT PRIMARY KEY,
+            user_id TEXT,
+            course TEXT NOT NULL,
+            content TEXT NOT NULL,
+            start_time TEXT,
+            deadline TEXT NOT NULL,
+            difficulty TEXT DEFAULT '中',
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
+        )
+        ''')
+        
+        conn.commit()
+        logger.info(f"数据库初始化完成，路径: {DB_PATH}")
+    except Exception as e:
+        logger.error(f"数据库初始化失败: {e}")
+        raise
+    finally:
+        if conn:
+            conn.close()
 
 # 初始化数据库
 init_db()
@@ -129,7 +145,7 @@ async def create_reminder(req: SaveReminderRequest):
     """保存提醒到数据库"""
     reminder_id = str(uuid.uuid4())
     
-    conn = sqlite3.connect('zhi_ji_xia.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     try:
@@ -148,6 +164,7 @@ async def create_reminder(req: SaveReminderRequest):
         ))
         
         conn.commit()
+        logger.info(f"创建提醒成功: {reminder_id}, 用户: {req.user_id}")
         
         return {
             "success": True,
@@ -156,6 +173,7 @@ async def create_reminder(req: SaveReminderRequest):
         }
     except Exception as e:
         conn.rollback()
+        logger.error(f"创建提醒失败: {e}")
         raise HTTPException(500, f"保存失败: {str(e)}")
     finally:
         conn.close()
@@ -163,7 +181,7 @@ async def create_reminder(req: SaveReminderRequest):
 @app.get("/api/reminders")
 async def get_reminders(user_id: str):
     """获取某用户的所有提醒"""
-    conn = sqlite3.connect('zhi_ji_xia.db')
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
@@ -186,15 +204,9 @@ async def get_reminders(user_id: str):
                     deadline = datetime.strptime(deadline_str, '%Y-%m-%d %H:%M')
                     now = datetime.now()
                     
-                    # 调试信息
-                    print(f"调试 - 截止时间字符串: {deadline_str}")
-                    print(f"调试 - 解析后截止时间: {deadline}")
-                    print(f"调试 - 当前时间: {now}")
-                    
                     # 直接比较datetime对象
                     if deadline <= now:
                         # 已过期
-                        print(f"调试 - 状态: 已过期")
                         reminder['days_left'] = 0
                         reminder['hours_left'] = 0
                         reminder['minutes_left'] = 0
@@ -204,14 +216,10 @@ async def get_reminders(user_id: str):
                         diff = deadline - now
                         total_seconds = int(diff.total_seconds())
                         
-                        print(f"调试 - 时间差: {diff}, 总秒数: {total_seconds}")
-                        
                         # 计算天、小时、分钟
                         days = total_seconds // (24 * 3600)
                         hours = (total_seconds % (24 * 3600)) // 3600
                         minutes = (total_seconds % 3600) // 60
-                        
-                        print(f"调试 - 计算: {days}天 {hours}小时 {minutes}分钟")
                         
                         # 保存到reminder对象
                         reminder['days_left'] = days
@@ -229,7 +237,7 @@ async def get_reminders(user_id: str):
                             reminder['time_left_display'] = "即将到期"
                         
                 except Exception as e:
-                    print(f"计算剩余时间错误: {e}, 截止时间字符串: {reminder.get('deadline', '无')}")
+                    logger.error(f"计算剩余时间错误: {e}, 截止时间字符串: {reminder.get('deadline', '无')}")
                     reminder['days_left'] = 0
                     reminder['hours_left'] = 0
                     reminder['minutes_left'] = 0
@@ -243,8 +251,10 @@ async def get_reminders(user_id: str):
             
             reminders.append(reminder)
         
+        logger.info(f"获取用户 {user_id} 的提醒，共 {len(reminders)} 条")
         return {"success": True, "data": reminders}
     except Exception as e:
+        logger.error(f"查询提醒失败: {e}")
         raise HTTPException(500, f"查询失败: {str(e)}")
     finally:
         conn.close()
@@ -252,7 +262,7 @@ async def get_reminders(user_id: str):
 @app.post("/api/reminders/{reminder_id}/complete")
 async def complete_reminder(reminder_id: str):
     """标记提醒为已完成"""
-    conn = sqlite3.connect('zhi_ji_xia.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     try:
@@ -266,6 +276,7 @@ async def complete_reminder(reminder_id: str):
             raise HTTPException(404, "提醒不存在")
         
         conn.commit()
+        logger.info(f"完成任务: {reminder_id}")
         
         return {
             "success": True,
@@ -275,6 +286,7 @@ async def complete_reminder(reminder_id: str):
         raise
     except Exception as e:
         conn.rollback()
+        logger.error(f"完成任务失败: {e}")
         raise HTTPException(500, f"更新失败: {str(e)}")
     finally:
         conn.close()
@@ -282,7 +294,7 @@ async def complete_reminder(reminder_id: str):
 @app.delete("/api/reminders/all")
 async def delete_all_reminders(user_id: str):
     """删除用户的所有任务"""
-    conn = sqlite3.connect('zhi_ji_xia.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     try:
@@ -291,15 +303,18 @@ async def delete_all_reminders(user_id: str):
         WHERE user_id = ?
         ''', (user_id,))
         
+        deleted_count = cursor.rowcount
         conn.commit()
+        logger.info(f"删除用户 {user_id} 的所有任务，共 {deleted_count} 条")
         
         return {
             "success": True,
             "message": "已删除所有任务",
-            "deleted_count": cursor.rowcount
+            "deleted_count": deleted_count
         }
     except Exception as e:
         conn.rollback()
+        logger.error(f"删除所有任务失败: {e}")
         raise HTTPException(500, f"删除失败: {str(e)}")
     finally:
         conn.close()
@@ -307,7 +322,7 @@ async def delete_all_reminders(user_id: str):
 @app.delete("/api/reminders/completed")
 async def delete_completed_reminders(user_id: str):
     """删除用户的所有已完成任务"""
-    conn = sqlite3.connect('zhi_ji_xia.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     try:
@@ -316,15 +331,18 @@ async def delete_completed_reminders(user_id: str):
         WHERE user_id = ? AND status = 'completed'
         ''', (user_id,))
         
+        deleted_count = cursor.rowcount
         conn.commit()
+        logger.info(f"删除用户 {user_id} 的已完成任务，共 {deleted_count} 条")
         
         return {
             "success": True,
             "message": "已删除所有已完成任务",
-            "deleted_count": cursor.rowcount
+            "deleted_count": deleted_count
         }
     except Exception as e:
         conn.rollback()
+        logger.error(f"删除已完成任务失败: {e}")
         raise HTTPException(500, f"删除失败: {str(e)}")
     finally:
         conn.close()
@@ -332,7 +350,7 @@ async def delete_completed_reminders(user_id: str):
 @app.delete("/api/reminders/expired")
 async def delete_expired_reminders(user_id: str):
     """删除用户的所有已过期任务（pending状态但已过截止时间）"""
-    conn = sqlite3.connect('zhi_ji_xia.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     try:
@@ -363,6 +381,7 @@ async def delete_expired_reminders(user_id: str):
             deleted_count += 1
         
         conn.commit()
+        logger.info(f"删除用户 {user_id} 的已过期任务，共 {deleted_count} 条")
         
         return {
             "success": True,
@@ -371,6 +390,7 @@ async def delete_expired_reminders(user_id: str):
         }
     except Exception as e:
         conn.rollback()
+        logger.error(f"删除已过期任务失败: {e}")
         raise HTTPException(500, f"删除失败: {str(e)}")
     finally:
         conn.close()
@@ -378,7 +398,7 @@ async def delete_expired_reminders(user_id: str):
 @app.post("/api/user")
 async def save_user(user_info: UserInfo):
     """保存或更新用户信息"""
-    conn = sqlite3.connect('zhi_ji_xia.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     try:
@@ -393,6 +413,7 @@ async def save_user(user_info: UserInfo):
         ))
         
         conn.commit()
+        logger.info(f"保存用户信息: {user_info.user_id}")
         
         return {
             "success": True,
@@ -400,6 +421,7 @@ async def save_user(user_info: UserInfo):
         }
     except Exception as e:
         conn.rollback()
+        logger.error(f"保存用户信息失败: {e}")
         raise HTTPException(500, f"保存用户信息失败: {str(e)}")
     finally:
         conn.close()
@@ -407,7 +429,7 @@ async def save_user(user_info: UserInfo):
 @app.get("/api/user")
 async def get_user(user_id: str):
     """获取用户信息"""
-    conn = sqlite3.connect('zhi_ji_xia.db')
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
@@ -420,12 +442,15 @@ async def get_user(user_id: str):
         
         row = cursor.fetchone()
         if row:
+            logger.info(f"获取用户信息: {user_id}")
             return {"success": True, "data": dict(row)}
         else:
+            logger.warning(f"用户不存在: {user_id}")
             raise HTTPException(404, "用户不存在")
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"查询用户失败: {e}")
         raise HTTPException(500, f"查询用户失败: {str(e)}")
     finally:
         conn.close()
