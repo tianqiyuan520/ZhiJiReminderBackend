@@ -14,6 +14,7 @@ class HomeworkInfo(BaseModel):
     start_time: Optional[str] = ""  # 开始时间
     deadline: str        # 截止时间，如 "2025-12-31 23:59"
     difficulty: Optional[str] = "中"  # 难度自评
+    image_url: Optional[str] = ""  # 图片URL
 
 class SaveReminderRequest(BaseModel):
     user_id: str

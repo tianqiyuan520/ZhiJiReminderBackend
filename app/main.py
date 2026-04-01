@@ -5,6 +5,10 @@ from datetime import datetime
 import json
 import os
 import logging
+from dotenv import load_dotenv
+
+# 加载.env文件中的环境变量
+load_dotenv()
 
 from app.models import HomeworkInfo, SaveReminderRequest, UserInfo, ImageUploadRequest
 from app.ocr import ocr_image
@@ -14,16 +18,24 @@ from app.admin import router as admin_router
 
 # 配置日志
 import os
-log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+log_level = os.getenv("LOG_LEVEL", "WARNING").upper()  # 默认使用WARNING级别
 logging.basicConfig(
-    level=getattr(logging, log_level, logging.INFO),
+    level=getattr(logging, log_level, logging.WARNING),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# 减少asyncio连接错误的日志噪音
+# 完全禁用asyncio连接错误的日志
 asyncio_logger = logging.getLogger('asyncio')
-asyncio_logger.setLevel(logging.WARNING)
+asyncio_logger.setLevel(logging.CRITICAL)  # 设置为CRITICAL，只显示严重错误
+
+# 禁用uvicorn的访问日志
+uvicorn_access_logger = logging.getLogger('uvicorn.access')
+uvicorn_access_logger.setLevel(logging.CRITICAL)
+
+# 禁用uvicorn的错误日志中的无效请求警告
+uvicorn_error_logger = logging.getLogger('uvicorn.error')
+uvicorn_error_logger.setLevel(logging.ERROR)  # 只显示ERROR及以上级别
 
 app = FastAPI(title="智记侠作业提醒API")
 
@@ -48,19 +60,65 @@ async def upload_homework_base64(request: dict):
     """上传截图（base64格式），OCR识别 + 大模型解析，返回作业信息"""
     try:
         import base64
+        import asyncio
+        
         # 获取base64图片数据
         image_base64 = request.get("image", "")
         if not image_base64:
             raise HTTPException(400, "图片数据为空")
         
+        # 检查图片大小（限制为2MB）
+        if len(image_base64) > 3 * 1024 * 1024:  # 3MB base64编码后大约4MB
+            raise HTTPException(400, "图片太大，请压缩后重试（建议小于2MB）")
+        
         # 解码base64图片
-        image_data = base64.b64decode(image_base64)
-        # OCR
-        ocr_text = ocr_image(image_data)
+        try:
+            image_data = base64.b64decode(image_base64)
+            logger.info(f"图片解码成功，大小: {len(image_data)} bytes")
+        except Exception as e:
+            logger.error(f"图片数据格式错误: {e}")
+            raise HTTPException(400, f"图片数据格式错误: {str(e)}")
+        
+        # OCR - 添加超时处理
+        try:
+            logger.info("开始OCR识别...")
+            ocr_text = await asyncio.wait_for(
+                asyncio.to_thread(ocr_image, image_data),
+                timeout=15.0  # 15秒超时
+            )
+            logger.info(f"OCR识别完成，文本长度: {len(ocr_text)}")
+        except asyncio.TimeoutError:
+            logger.error("OCR处理超时")
+            raise HTTPException(408, "OCR处理超时，请稍后重试")
+        except Exception as e:
+            logger.error(f"OCR处理失败: {e}")
+            raise HTTPException(500, f"OCR识别失败: {str(e)}")
+        
         if not ocr_text:
+            logger.warning("OCR识别结果为空")
             raise HTTPException(400, "OCR识别失败，请确保图片清晰")
-        # 大模型解析
-        info = await parse_homework_info(ocr_text)
+        
+        # 大模型解析 - 添加超时处理
+        try:
+            logger.info("开始AI解析...")
+            info = await asyncio.wait_for(
+                parse_homework_info(ocr_text),
+                timeout=30.0  # 30秒超时
+            )
+            logger.info(f"AI解析完成: {info}")
+        except asyncio.TimeoutError:
+            logger.error("AI解析超时")
+            raise HTTPException(408, "AI解析超时，请稍后重试")
+        except Exception as e:
+            logger.error(f"AI解析失败: {e}")
+            # 即使AI解析失败，也返回OCR结果
+            info = {
+                "course": "未知课程",
+                "content": ocr_text[:100] + "..." if len(ocr_text) > 100 else ocr_text,
+                "deadline": "未指定"
+            }
+            logger.info(f"使用OCR结果作为回退: {info}")
+        
         return {
             "success": True,
             "data": {
@@ -69,7 +127,10 @@ async def upload_homework_base64(request: dict):
                 "deadline": info.get("deadline", "未指定")
             }
         }
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"上传处理失败: {e}", exc_info=True)
         raise HTTPException(500, f"处理失败: {str(e)}")
 
 @app.post("/api/upload-file")
@@ -148,10 +209,10 @@ async def create_reminder(req: SaveReminderRequest):
         logger.warning(f"创建用户失败，继续尝试创建提醒: {user_error}")
         # 继续尝试创建提醒，如果外键约束失败会抛出异常
     
-    # 创建提醒
+    # 创建提醒（包含image_url）
     query = """
-    INSERT INTO reminders (id, user_id, course, content, start_time, deadline, difficulty, status)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    INSERT INTO reminders (id, user_id, course, content, start_time, deadline, difficulty, status, image_url)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
     
     params = (
@@ -162,7 +223,8 @@ async def create_reminder(req: SaveReminderRequest):
         req.homework.start_time,
         req.homework.deadline,
         req.homework.difficulty,
-        'pending'
+        'pending',
+        req.homework.image_url if hasattr(req.homework, 'image_url') else None
     )
     
     try:
@@ -182,7 +244,7 @@ async def create_reminder(req: SaveReminderRequest):
 async def get_reminders(user_id: str):
     """获取某用户的所有提醒"""
     query = """
-    SELECT id, user_id, course, content, start_time, deadline, difficulty, status, created_at
+    SELECT id, user_id, course, content, start_time, deadline, difficulty, status, created_at, image_url
     FROM reminders 
     WHERE user_id = %s
     ORDER BY created_at DESC
@@ -195,25 +257,18 @@ async def get_reminders(user_id: str):
         for row in reminders_data:
             reminder = dict(row)
             # 计算剩余时间（天、小时、分钟）- 使用北京时间（UTC+8）
-            if reminder['deadline'] and reminder['status'] == 'pending':
+            if reminder['deadline'] and reminder['deadline'] != '未指定' and reminder['status'] == 'pending':
                 try:
                     deadline_str = reminder['deadline']
                     # 解析截止时间，假设输入的是北京时间
+                    from datetime import datetime
                     deadline = datetime.strptime(deadline_str, '%Y-%m-%d %H:%M')
                     
-                    # 获取当前北京时间（UTC+8）
-                    import pytz
-                    from datetime import datetime, timezone, timedelta
-                    
-                    # 创建北京时间时区
-                    beijing_tz = pytz.timezone('Asia/Shanghai')
-                    now_beijing = datetime.now(beijing_tz)
-                    
-                    # 将deadline转换为带有时区信息的datetime（假设是北京时间）
-                    deadline_beijing = beijing_tz.localize(deadline)
+                    # 获取当前时间（使用本地时间，假设是北京时间）
+                    now = datetime.now()
                     
                     # 直接比较datetime对象
-                    if deadline_beijing <= now_beijing:
+                    if deadline <= now:
                         # 已过期
                         reminder['days_left'] = 0
                         reminder['hours_left'] = 0
@@ -221,7 +276,7 @@ async def get_reminders(user_id: str):
                         reminder['time_left_display'] = "已过期"
                     else:
                         # 计算时间差
-                        diff = deadline_beijing - now_beijing
+                        diff = deadline - now
                         total_seconds = int(diff.total_seconds())
                         
                         # 计算天、小时、分钟
@@ -243,6 +298,9 @@ async def get_reminders(user_id: str):
                             reminder['time_left_display'] = f"{minutes}分钟"
                         else:
                             reminder['time_left_display'] = "即将到期"
+                        
+                        # 添加调试信息
+                        logger.debug(f"时间计算: 现在={now}, 截止={deadline}, 剩余={days}天{hours}小时{minutes}分钟")
                         
                 except Exception as e:
                     logger.error(f"计算剩余时间错误: {e}, 截止时间字符串: {reminder.get('deadline', '无')}")
@@ -317,6 +375,32 @@ async def complete_reminder(reminder_id: str):
     except Exception as e:
         logger.error(f"完成任务失败: {e}")
         raise HTTPException(500, f"更新失败: {str(e)}")
+
+@app.delete("/api/reminders/{reminder_id}")
+async def delete_reminder(reminder_id: str):
+    """删除提醒"""
+    query = """
+    DELETE FROM reminders 
+    WHERE id = %s
+    """
+    
+    try:
+        rowcount = db_config.execute_query(query, (reminder_id,))
+        
+        if rowcount == 0:
+            raise HTTPException(404, "提醒不存在")
+        
+        logger.info(f"删除任务: {reminder_id}")
+        
+        return {
+            "success": True,
+            "message": "任务已删除"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除任务失败: {e}")
+        raise HTTPException(500, f"删除失败: {str(e)}")
 
 @app.delete("/api/reminders/all")
 async def delete_all_reminders(user_id: str):

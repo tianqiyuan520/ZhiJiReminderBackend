@@ -272,12 +272,23 @@ def add_last_notified_column():
         if db_config.db_type == "sqlite":
             check_query = "PRAGMA table_info(reminders)"
             columns = db_config.execute_query(check_query)
-            column_names = [col["name"] for col in columns]
+            # 安全地提取列名，处理可能的键大小写问题
+            column_names = []
+            for col in columns:
+                # 尝试不同的大小写
+                if "name" in col:
+                    column_names.append(col["name"])
+                elif "NAME" in col:
+                    column_names.append(col["NAME"])
+                elif "Name" in col:
+                    column_names.append(col["Name"])
             
             if "last_notified" not in column_names:
                 alter_query = "ALTER TABLE reminders ADD COLUMN last_notified TEXT"
                 db_config.execute_query(alter_query)
                 logger.info("已添加last_notified列到reminders表")
+            else:
+                logger.info("last_notified列已存在")
         else:
             # PostgreSQL - 使用小写表名和列名
             check_query = """
@@ -305,6 +316,8 @@ def add_last_notified_column():
                         logger.error(f"last_notified列确实不存在且无法添加: {test_error}")
                         # 创建不带last_notified列的临时视图或修改查询逻辑
                         # 这里我们记录错误，但让应用继续运行
+            else:
+                logger.info("last_notified列已存在")
                         
     except Exception as e:
         logger.error(f"添加last_notified列失败: {e}")

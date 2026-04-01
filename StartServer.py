@@ -10,6 +10,10 @@ import socket
 import subprocess
 import time
 from datetime import datetime
+from dotenv import load_dotenv
+
+# 加载.env文件中的环境变量
+load_dotenv()
 
 def check_port_available(port):
     """检查端口是否可用"""
@@ -71,7 +75,8 @@ def start_server(port=8000, reload=False):
         sys.executable, '-m', 'uvicorn',
         'app.main:app',
         '--host', 'localhost',
-        '--port', str(port)
+        '--port', str(port),
+        '--log-level', 'warning'  # 设置日志级别为warning，减少info级别的日志
     ]
     
     if reload:

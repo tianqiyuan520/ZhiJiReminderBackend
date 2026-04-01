@@ -195,6 +195,7 @@ def init_database():
         status TEXT DEFAULT 'pending',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_notified TEXT,
+        image_url TEXT,  -- 新增：图片URL字段
         FOREIGN KEY (user_id) REFERENCES users (user_id)
     )
     """
@@ -207,6 +208,51 @@ def init_database():
         # 创建提醒表
         db_config.execute_query(create_reminders_table)
         logger.info("提醒表创建/检查完成")
+        
+        # 检查并添加缺失的列（如果表已存在）
+        try:
+            if db_config.db_type == "postgresql":
+                # PostgreSQL: 检查last_notified列是否存在
+                check_last_notified_query = """
+                SELECT COUNT(*) as count FROM information_schema.columns 
+                WHERE table_name='reminders' AND column_name='last_notified'
+                """
+            else:
+                # SQLite: 检查last_notified列是否存在
+                check_last_notified_query = """
+                SELECT COUNT(*) as count FROM pragma_table_info('reminders') WHERE name='last_notified'
+                """
+            
+            result = db_config.execute_query(check_last_notified_query)
+            if result and result[0].get('count', 0) == 0:
+                # 添加last_notified列
+                add_last_notified_query = "ALTER TABLE reminders ADD COLUMN last_notified TEXT"
+                db_config.execute_query(add_last_notified_query)
+                logger.info("已添加last_notified列到reminders表")
+        except Exception as col_error:
+            logger.warning(f"检查/添加last_notified列失败: {col_error}")
+        
+        try:
+            if db_config.db_type == "postgresql":
+                # PostgreSQL: 检查image_url列是否存在
+                check_image_url_query = """
+                SELECT COUNT(*) as count FROM information_schema.columns 
+                WHERE table_name='reminders' AND column_name='image_url'
+                """
+            else:
+                # SQLite: 检查image_url列是否存在
+                check_image_url_query = """
+                SELECT COUNT(*) as count FROM pragma_table_info('reminders') WHERE name='image_url'
+                """
+            
+            result = db_config.execute_query(check_image_url_query)
+            if result and result[0].get('count', 0) == 0:
+                # 添加image_url列
+                add_image_url_query = "ALTER TABLE reminders ADD COLUMN image_url TEXT"
+                db_config.execute_query(add_image_url_query)
+                logger.info("已添加image_url列到reminders表")
+        except Exception as col_error:
+            logger.warning(f"检查/添加image_url列失败: {col_error}")
         
         # 创建默认用户 "test"（如果不存在）
         create_default_user_query = """
