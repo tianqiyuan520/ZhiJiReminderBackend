@@ -154,42 +154,54 @@ def check_due_reminders():
     logger.info("开始检查即将到期的提醒...")
     
     try:
+        # 首先检查last_notified列是否存在
+        last_notified_exists = False
+        try:
+            # 尝试查询last_notified列
+            test_query = "SELECT last_notified FROM reminders LIMIT 1"
+            db_config.execute_query(test_query)
+            last_notified_exists = True
+            logger.info("last_notified列存在，使用完整查询")
+        except Exception:
+            logger.warning("last_notified列不存在，使用简化查询")
+            last_notified_exists = False
+        
         # 查询所有待处理且即将到期的提醒
         # 提前1天、3小时、1小时发送提醒
         now = datetime.now()
         
+        # 构建查询语句（根据列是否存在）
+        if last_notified_exists:
+            # 有last_notified列的查询
+            base_query = """
+            SELECT r.id, r.user_id, r.course, r.content, r.deadline, u.openid
+            FROM reminders r
+            JOIN users u ON r.user_id = u.user_id
+            WHERE r.status = 'pending' 
+            AND r.deadline BETWEEN %s AND %s
+            AND (r.last_notified IS NULL OR r.last_notified < %s)
+            """
+        else:
+            # 没有last_notified列的简化查询
+            base_query = """
+            SELECT r.id, r.user_id, r.course, r.content, r.deadline, u.openid
+            FROM reminders r
+            JOIN users u ON r.user_id = u.user_id
+            WHERE r.status = 'pending' 
+            AND r.deadline BETWEEN %s AND %s
+            """
+        
         # 1天后到期的提醒
         one_day_later = now + timedelta(days=1)
-        one_day_query = """
-        SELECT r.id, r.user_id, r.course, r.content, r.deadline, u.openid
-        FROM reminders r
-        JOIN users u ON r.user_id = u.user_id
-        WHERE r.status = 'pending' 
-        AND r.deadline BETWEEN %s AND %s
-        AND (r.last_notified IS NULL OR r.last_notified < %s)
-        """
+        one_day_query = base_query
         
         # 3小时后到期的提醒
         three_hours_later = now + timedelta(hours=3)
-        three_hours_query = """
-        SELECT r.id, r.user_id, r.course, r.content, r.deadline, u.openid
-        FROM reminders r
-        JOIN users u ON r.user_id = u.user_id
-        WHERE r.status = 'pending' 
-        AND r.deadline BETWEEN %s AND %s
-        AND (r.last_notified IS NULL OR r.last_notified < %s)
-        """
+        three_hours_query = base_query
         
         # 1小时后到期的提醒
         one_hour_later = now + timedelta(hours=1)
-        one_hour_query = """
-        SELECT r.id, r.user_id, r.course, r.content, r.deadline, u.openid
-        FROM reminders r
-        JOIN users u ON r.user_id = u.user_id
-        WHERE r.status = 'pending' 
-        AND r.deadline BETWEEN %s AND %s
-        AND (r.last_notified IS NULL OR r.last_notified < %s)
-        """
+        one_hour_query = base_query
         
         # 格式化时间字符串
         time_format = '%Y-%m-%d %H:%M'
@@ -197,26 +209,20 @@ def check_due_reminders():
         # 检查1天后到期的提醒
         one_day_start = now.strftime(time_format)
         one_day_end = one_day_later.strftime(time_format)
-        one_day_reminders = db_config.execute_query(
-            one_day_query, 
-            (one_day_start, one_day_end, now.strftime(time_format))
-        )
+        one_day_params = (one_day_start, one_day_end, now.strftime(time_format)) if last_notified_exists else (one_day_start, one_day_end)
+        one_day_reminders = db_config.execute_query(one_day_query, one_day_params)
         
         # 检查3小时后到期的提醒
         three_hours_start = now.strftime(time_format)
         three_hours_end = three_hours_later.strftime(time_format)
-        three_hours_reminders = db_config.execute_query(
-            three_hours_query,
-            (three_hours_start, three_hours_end, now.strftime(time_format))
-        )
+        three_hours_params = (three_hours_start, three_hours_end, now.strftime(time_format)) if last_notified_exists else (three_hours_start, three_hours_end)
+        three_hours_reminders = db_config.execute_query(three_hours_query, three_hours_params)
         
         # 检查1小时后到期的提醒
         one_hour_start = now.strftime(time_format)
         one_hour_end = one_hour_later.strftime(time_format)
-        one_hour_reminders = db_config.execute_query(
-            one_hour_query,
-            (one_hour_start, one_hour_end, now.strftime(time_format))
-        )
+        one_hour_params = (one_hour_start, one_hour_end, now.strftime(time_format)) if last_notified_exists else (one_hour_start, one_hour_end)
+        one_hour_reminders = db_config.execute_query(one_hour_query, one_hour_params)
         
         all_reminders = one_day_reminders + three_hours_reminders + one_hour_reminders
         sent_count = 0
@@ -236,10 +242,15 @@ def check_due_reminders():
                     reminder_info
                 )
                 
+                if success and last_notified_exists:
+                    # 更新最后通知时间（如果列存在）
+                    try:
+                        update_query = "UPDATE reminders SET last_notified = %s WHERE id = %s"
+                        db_config.execute_query(update_query, (now.strftime(time_format), reminder["id"]))
+                    except Exception as update_error:
+                        logger.warning(f"更新last_notified失败: {update_error}")
+                
                 if success:
-                    # 更新最后通知时间
-                    update_query = "UPDATE reminders SET last_notified = %s WHERE id = %s"
-                    db_config.execute_query(update_query, (now.strftime(time_format), reminder["id"]))
                     sent_count += 1
                     logger.info(f"已发送提醒通知: {reminder['user_id']} - {reminder['course']}")
                 
@@ -268,7 +279,7 @@ def add_last_notified_column():
                 db_config.execute_query(alter_query)
                 logger.info("已添加last_notified列到reminders表")
         else:
-            # PostgreSQL
+            # PostgreSQL - 使用小写表名和列名
             check_query = """
             SELECT column_name 
             FROM information_schema.columns 
@@ -277,9 +288,23 @@ def add_last_notified_column():
             result = db_config.execute_query(check_query)
             
             if not result:
-                alter_query = "ALTER TABLE reminders ADD COLUMN last_notified TEXT"
-                db_config.execute_query(alter_query)
-                logger.info("已添加last_notified列到reminders表")
-                
+                try:
+                    # 尝试添加列
+                    alter_query = "ALTER TABLE reminders ADD COLUMN last_notified TEXT"
+                    db_config.execute_query(alter_query)
+                    logger.info("已添加last_notified列到reminders表")
+                except Exception as alter_error:
+                    # 如果添加失败，可能是权限问题或列已存在但信息模式未更新
+                    logger.warning(f"添加last_notified列失败，可能已存在: {alter_error}")
+                    # 尝试检查列是否存在（直接查询表结构）
+                    try:
+                        test_query = "SELECT last_notified FROM reminders LIMIT 1"
+                        db_config.execute_query(test_query)
+                        logger.info("last_notified列已存在")
+                    except Exception as test_error:
+                        logger.error(f"last_notified列确实不存在且无法添加: {test_error}")
+                        # 创建不带last_notified列的临时视图或修改查询逻辑
+                        # 这里我们记录错误，但让应用继续运行
+                        
     except Exception as e:
         logger.error(f"添加last_notified列失败: {e}")

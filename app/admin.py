@@ -47,25 +47,48 @@ async def management_home(request: Request, auth: bool = Depends(check_admin_aut
         user_query = "SELECT COUNT(*) as count FROM users"
         user_result = db_config.execute_query(user_query)
         if user_result:
-            stats["user_count"] = user_result[0].get("count", 0)
+            # 确保结果是标量值，不是字典
+            count_value = user_result[0].get("count", 0)
+            if isinstance(count_value, dict):
+                logger.error(f"用户总数查询返回了字典: {count_value}")
+                stats["user_count"] = 0
+            else:
+                stats["user_count"] = count_value
         
         # 提醒总数
         reminder_query = "SELECT COUNT(*) as count FROM reminders"
         reminder_result = db_config.execute_query(reminder_query)
         if reminder_result:
-            stats["reminder_count"] = reminder_result[0].get("count", 0)
+            count_value = reminder_result[0].get("count", 0)
+            if isinstance(count_value, dict):
+                logger.error(f"提醒总数查询返回了字典: {count_value}")
+                stats["reminder_count"] = 0
+            else:
+                stats["reminder_count"] = count_value
         
         # 待处理提醒数
         pending_query = "SELECT COUNT(*) as count FROM reminders WHERE status = 'pending'"
         pending_result = db_config.execute_query(pending_query)
         if pending_result:
-            stats["pending_count"] = pending_result[0].get("count", 0)
+            count_value = pending_result[0].get("count", 0)
+            if isinstance(count_value, dict):
+                logger.error(f"待处理提醒数查询返回了字典: {count_value}")
+                stats["pending_count"] = 0
+            else:
+                stats["pending_count"] = count_value
         
         # 已完成提醒数
         completed_query = "SELECT COUNT(*) as count FROM reminders WHERE status = 'completed'"
         completed_result = db_config.execute_query(completed_query)
         if completed_result:
-            stats["completed_count"] = completed_result[0].get("count", 0)
+            count_value = completed_result[0].get("count", 0)
+            if isinstance(count_value, dict):
+                logger.error(f"已完成提醒数查询返回了字典: {count_value}")
+                stats["completed_count"] = 0
+            else:
+                stats["completed_count"] = count_value
+        
+        logger.info(f"管理首页统计信息: {stats}")
         
         return templates.TemplateResponse(
             "management.html",
@@ -76,7 +99,7 @@ async def management_home(request: Request, auth: bool = Depends(check_admin_aut
             }
         )
     except Exception as e:
-        logger.error(f"管理首页加载失败: {e}")
+        logger.error(f"管理首页加载失败: {e}", exc_info=True)
         raise HTTPException(500, f"管理页面加载失败: {str(e)}")
 
 
