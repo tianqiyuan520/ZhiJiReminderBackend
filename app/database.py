@@ -98,6 +98,12 @@ class DatabaseConfig:
         cursor = conn.cursor()
         
         try:
+            # 转换参数占位符：PostgreSQL使用%s，SQLite使用?
+            if self.db_type != "postgresql":
+                # 将%s替换为?（仅当有参数时）
+                if params:
+                    query = query.replace("%s", "?")
+            
             # 如果是SQLite，需要处理INSERT OR REPLACE语法
             if self.db_type != "postgresql" and "INSERT OR REPLACE" in query.upper():
                 # 转换为SQLite的INSERT OR REPLACE语法
