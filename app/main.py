@@ -552,32 +552,6 @@ async def delete_all_reminders(user_id: str):
         # 返回错误，让前端知道删除失败
         raise HTTPException(500, f"删除失败: {str(e)}")
 
-@app.delete("/api/reminders/{reminder_id}")
-async def delete_reminder(reminder_id: str):
-    """删除提醒"""
-    query = """
-    DELETE FROM reminders 
-    WHERE id = %s
-    """
-    
-    try:
-        rowcount = db_config.execute_query(query, (reminder_id,))
-        
-        if rowcount == 0:
-            raise HTTPException(404, "提醒不存在")
-        
-        logger.info(f"删除任务: {reminder_id}")
-        
-        return {
-            "success": True,
-            "message": "任务已删除"
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"删除任务失败: {e}")
-        raise HTTPException(500, f"删除失败: {str(e)}")
-
 @app.delete("/api/reminders/completed")
 async def delete_completed_reminders(user_id: str):
     """删除用户的所有已完成任务"""
@@ -647,6 +621,32 @@ async def delete_expired_reminders(user_id: str):
         }
     except Exception as e:
         logger.error(f"删除已过期任务失败: {e}")
+        raise HTTPException(500, f"删除失败: {str(e)}")
+
+@app.delete("/api/reminders/{reminder_id}")
+async def delete_reminder(reminder_id: str):
+    """删除提醒"""
+    query = """
+    DELETE FROM reminders 
+    WHERE id = %s
+    """
+    
+    try:
+        rowcount = db_config.execute_query(query, (reminder_id,))
+        
+        if rowcount == 0:
+            raise HTTPException(404, "提醒不存在")
+        
+        logger.info(f"删除任务: {reminder_id}")
+        
+        return {
+            "success": True,
+            "message": "任务已删除"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除任务失败: {e}")
         raise HTTPException(500, f"删除失败: {str(e)}")
 
 @app.post("/api/user")
