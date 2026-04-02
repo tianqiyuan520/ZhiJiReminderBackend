@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from app.models import HomeworkInfo, SaveReminderRequest, UserInfo, ImageUploadRequest
+from fastapi.responses import Response
 from app.ocr import ocr_image
 from app.llm import parse_homework_info, analyze_homework as analyze_homework_ai
 from app.database import db_config, init_database, get_db, close_db
@@ -57,11 +58,16 @@ if not os.path.exists(images_dir):
     os.makedirs(images_dir)
 app.mount("/images", StaticFiles(directory=images_dir), name="images")
 
-# 初始化数据库
-init_database()
-
 # 注册管理路由
 app.include_router(admin_router)
+
+# 在应用启动时初始化数据库
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时初始化数据库"""
+    logger.info("应用启动，初始化数据库...")
+    init_database()
+    logger.info("数据库初始化完成")
 
 @app.post("/api/upload")
 async def upload_homework_base64(request: dict):
@@ -166,20 +172,18 @@ async def upload_homework_file(file: UploadFile = File(...)):
 
 @app.post("/api/upload-image-only")
 async def upload_image_only(request_data: dict):
-    """只上传图片（不进行OCR识别），返回图片URL（用于保存按钮）"""
+    """只上传图片（不进行OCR识别），保存到数据库并返回图片API URL（用于保存按钮）"""
     try:
         import base64
         import uuid
-        import os
-        from fastapi import Request
+        import re
         
         # 获取base64图片数据
         image_base64 = request_data.get("image", "")
+        user_id = request_data.get("user_id", "test")
+        
         if not image_base64:
             raise HTTPException(400, "图片数据为空")
-        
-        # 移除文件大小限制（根据用户要求）
-        # 注意：大文件可能会影响性能和存储空间
         
         # 解码base64图片
         try:
@@ -189,57 +193,62 @@ async def upload_image_only(request_data: dict):
             logger.error(f"图片数据格式错误: {e}")
             raise HTTPException(400, f"图片数据格式错误: {str(e)}")
         
-        # 生成唯一的文件名
-        image_id = str(uuid.uuid4())
-        image_filename = f"{image_id}.jpg"
+        # 生成唯一的提醒ID
+        reminder_id = str(uuid.uuid4())
         
-        # 保存图片到本地（临时方案，生产环境应该使用云存储）
-        # 创建images目录（如果不存在）
-        images_dir = "images"
-        if not os.path.exists(images_dir):
-            os.makedirs(images_dir)
+        # 检测图片类型
+        image_type = "image/jpeg"  # 默认类型
+        if image_base64.startswith("data:image/"):
+            # 从data URL中提取类型
+            match = re.match(r'data:(image/[^;]+)', image_base64)
+            if match:
+                image_type = match.group(1)
         
-        # 保存图片文件
-        image_path = os.path.join(images_dir, image_filename)
-        with open(image_path, "wb") as f:
-            f.write(image_data)
+        # 创建提醒记录（只包含图片数据，其他字段为默认值）
+        query = """
+        INSERT INTO reminders (
+            id, user_id, course, content, start_time, deadline, 
+            difficulty, status, image_data, image_type
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
         
-        logger.info(f"图片保存成功: {image_path}")
+        params = (
+            reminder_id,
+            user_id,
+            "待填写课程",
+            "待填写作业内容",
+            "",
+            "未指定",
+            "中",
+            'pending',
+            image_data,
+            image_type
+        )
         
-        # 动态生成图片URL - 简化逻辑，根据环境变量决定
-        # 优先使用环境变量中的FRONTEND_BASE_URL，如果没有则根据RENDER环境变量判断
-        base_url = os.getenv("FRONTEND_BASE_URL", "")
-        
-        if not base_url:
-            # 如果没有设置FRONTEND_BASE_URL，根据RENDER环境变量判断
-            render_env = os.getenv("RENDER", "false").lower() == "true"
-            if render_env:
-                base_url = "https://zhijireminderbackend.onrender.com"
-                logger.info(f"Render生产环境，使用生产URL: {base_url}")
-            else:
-                base_url = "http://localhost:8002"
-                logger.info(f"本地开发环境，使用本地URL: {base_url}")
-        else:
-            logger.info(f"使用环境变量中的FRONTEND_BASE_URL: {base_url}")
-        
-        # 确保URL以/images/结尾
-        image_url = f"{base_url.rstrip('/')}/images/{image_filename}"
-        
-        # 记录生成的URL用于调试
-        logger.info(f"生成的图片URL: {image_url}")
-        logger.info(f"图片文件路径: {image_path}")
-        logger.info(f"图片文件存在: {os.path.exists(image_path)}")
-        logger.info(f"图片文件大小: {os.path.getsize(image_path) if os.path.exists(image_path) else '文件不存在'} bytes")
-        
-        logger.info(f"生成的图片URL: {image_url}")
-        
-        return {
-            "success": True,
-            "data": {
-                "image_url": image_url,
-                "message": "图片上传成功"
+        try:
+            db_config.execute_query(query, params)
+            logger.info(f"图片保存到数据库成功: {reminder_id}, 用户: {user_id}")
+            
+            # 返回图片API URL，而不是文件URL
+            image_api_url = f"/api/images/{reminder_id}"
+            
+            # 为了兼容性，也返回完整的URL
+            base_url = os.getenv("FRONTEND_BASE_URL", "http://localhost:8002")
+            full_image_url = f"{base_url.rstrip('/')}{image_api_url}"
+            
+            return {
+                "success": True,
+                "data": {
+                    "image_url": full_image_url,  # 保持字段名不变以兼容前端
+                    "reminder_id": reminder_id,
+                    "image_api_url": image_api_url,
+                    "message": "图片上传成功并保存到数据库"
+                }
             }
-        }
+        except Exception as db_error:
+            logger.error(f"保存图片到数据库失败: {db_error}")
+            raise HTTPException(500, f"保存图片失败: {str(db_error)}")
+            
     except HTTPException:
         raise
     except Exception as e:
@@ -298,10 +307,21 @@ async def create_reminder(req: SaveReminderRequest):
         logger.warning(f"创建用户失败，继续尝试创建提醒: {user_error}")
         # 继续尝试创建提醒，如果外键约束失败会抛出异常
     
-    # 创建提醒（包含image_url）
+    # 创建提醒（包含image_url和可能的image_data）
+    # 检查是否有图片数据需要保存
+    image_data = None
+    image_type = None
+    
+    # 如果请求中包含图片数据，则保存到数据库
+    if hasattr(req, 'image_data') and req.image_data:
+        image_data = req.image_data
+        image_type = getattr(req, 'image_type', 'image/jpeg')
+    
     query = """
-    INSERT INTO reminders (id, user_id, course, content, start_time, deadline, difficulty, status, image_url)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    INSERT INTO reminders (
+        id, user_id, course, content, start_time, deadline, 
+        difficulty, status, image_url, image_data, image_type
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
     
     params = (
@@ -313,7 +333,9 @@ async def create_reminder(req: SaveReminderRequest):
         req.homework.deadline,
         req.homework.difficulty,
         'pending',
-        req.homework.image_url if hasattr(req.homework, 'image_url') else None
+        req.homework.image_url if hasattr(req.homework, 'image_url') else None,
+        image_data,
+        image_type
     )
     
     try:
@@ -344,7 +366,24 @@ async def get_reminders(user_id: str):
         reminders = []
         
         for row in reminders_data:
-            reminder = dict(row)
+            # 手动构建字典，确保所有值都是可序列化的
+            reminder = {
+                'id': row.get('id'),
+                'user_id': row.get('user_id'),
+                'course': row.get('course'),
+                'content': row.get('content'),
+                'start_time': row.get('start_time'),
+                'deadline': row.get('deadline'),
+                'difficulty': row.get('difficulty'),
+                'status': row.get('status'),
+                'created_at': str(row.get('created_at')) if row.get('created_at') else None,
+                'image_url': row.get('image_url')
+            }
+            
+            # 处理图片URL：如果image_url为空，则设置为None
+            if not reminder.get('image_url'):
+                reminder['image_url'] = None
+            
             # 计算剩余时间（天、小时、分钟）- 使用北京时间（UTC+8）
             if reminder['deadline'] and reminder['deadline'] != '未指定' and reminder['status'] == 'pending':
                 try:
@@ -777,3 +816,119 @@ async def test_subscribe_message(user_id: str):
     except Exception as e:
         logger.error(f"测试订阅消息失败: {e}")
         raise HTTPException(500, f"测试失败: {str(e)}")
+
+
+@app.get("/api/images/{reminder_id}")
+async def get_image(reminder_id: str):
+    """获取提醒的图片数据"""
+    try:
+        # 查询图片数据
+        query = """
+        SELECT image_data, image_type 
+        FROM reminders 
+        WHERE id = %s AND image_data IS NOT NULL
+        """
+        
+        result = db_config.execute_query(query, (reminder_id,))
+        
+        if not result:
+            raise HTTPException(404, "图片不存在")
+        
+        image_data = result[0].get('image_data')
+        image_type = result[0].get('image_type', 'image/jpeg')
+        
+        if not image_data:
+            raise HTTPException(404, "图片数据为空")
+        
+        # 返回图片数据
+        return Response(
+            content=image_data,
+            media_type=image_type,
+            headers={
+                "Cache-Control": "public, max-age=86400",  # 缓存1天
+                "Content-Disposition": f'inline; filename="{reminder_id}.jpg"'
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取图片失败: {e}")
+        raise HTTPException(500, f"获取图片失败: {str(e)}")
+
+
+@app.post("/api/upload-image-binary")
+async def upload_image_binary(request_data: dict):
+    """上传图片并保存二进制数据到数据库（用于保存按钮）"""
+    try:
+        import base64
+        import uuid
+        
+        # 获取base64图片数据
+        image_base64 = request_data.get("image", "")
+        user_id = request_data.get("user_id", "test")
+        
+        if not image_base64:
+            raise HTTPException(400, "图片数据为空")
+        
+        # 解码base64图片
+        try:
+            image_data = base64.b64decode(image_base64)
+            logger.info(f"图片解码成功，大小: {len(image_data)} bytes")
+        except Exception as e:
+            logger.error(f"图片数据格式错误: {e}")
+            raise HTTPException(400, f"图片数据格式错误: {str(e)}")
+        
+        # 生成唯一的提醒ID
+        reminder_id = str(uuid.uuid4())
+        
+        # 检测图片类型
+        image_type = "image/jpeg"  # 默认类型
+        if image_base64.startswith("data:image/"):
+            # 从data URL中提取类型
+            import re
+            match = re.match(r'data:(image/[^;]+)', image_base64)
+            if match:
+                image_type = match.group(1)
+        
+        # 创建提醒记录（只包含图片数据，其他字段为默认值）
+        query = """
+        INSERT INTO reminders (
+            id, user_id, course, content, start_time, deadline, 
+            difficulty, status, image_data, image_type
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        
+        params = (
+            reminder_id,
+            user_id,
+            "待填写课程",
+            "待填写作业内容",
+            "",
+            "未指定",
+            "中",
+            'pending',
+            image_data,
+            image_type
+        )
+        
+        try:
+            db_config.execute_query(query, params)
+            logger.info(f"图片保存到数据库成功: {reminder_id}, 用户: {user_id}")
+            
+            return {
+                "success": True,
+                "data": {
+                    "reminder_id": reminder_id,
+                    "image_api_url": f"/api/images/{reminder_id}",
+                    "message": "图片上传成功并保存到数据库"
+                }
+            }
+        except Exception as db_error:
+            logger.error(f"保存图片到数据库失败: {db_error}")
+            raise HTTPException(500, f"保存图片失败: {str(db_error)}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"上传图片失败: {e}", exc_info=True)
+        raise HTTPException(500, f"上传图片失败: {str(e)}")

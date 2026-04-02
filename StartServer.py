@@ -87,41 +87,56 @@ def start_server(port=8000, reload=False):
     print("-" * 60)
     
     try:
-        # 启动服务器
-        process = subprocess.Popen(cmd)
+        # 启动服务器（不捕获输出，让用户看到uvicorn的输出）
+        print("正在启动服务器...")
+        print("注意: 服务器将在当前终端运行，请勿关闭此窗口")
+        print("-" * 60)
         
-        print(f"服务器已启动! PID: {process.pid}")
+        # 直接运行uvicorn，不通过subprocess.Popen
+        # 这样用户可以看到实时日志
+        import uvicorn
+        
+        # 配置uvicorn
+        config = uvicorn.Config(
+            "app.main:app",
+            host="localhost",
+            port=port,
+            log_level="info",  # 改为info级别，显示启动信息
+            reload=reload
+        )
+        
+        server = uvicorn.Server(config)
+        
+        # 在单独的线程中启动定时任务调度器
+        import threading
+        def start_scheduler():
+            try:
+                from app.scheduler import init_scheduler
+                scheduler = init_scheduler()
+                print(f"\n[定时任务] 调度器已启动，检查间隔: {scheduler.check_interval_minutes}分钟")
+            except Exception as e:
+                print(f"\n[定时任务] 启动失败: {e}")
+        
+        scheduler_thread = threading.Thread(target=start_scheduler, daemon=True)
+        scheduler_thread.start()
+        
+        print(f"\n服务器启动成功!")
         print(f"API地址: http://localhost:{port}")
         print(f"API文档: http://localhost:{port}/docs")
         print(f"首页: http://localhost:{port}/")
-        
-        # 启动定时任务调度器
-        print("\n启动定时任务调度器...")
-        try:
-            # 导入并启动调度器
-            sys.path.insert(0, os.getcwd())
-            from app.scheduler import init_scheduler
-            scheduler = init_scheduler()
-            print("✓ 定时任务调度器已启动")
-            print(f"  检查间隔: {scheduler.check_interval_minutes}分钟")
-            print(f"  定时检查即将到期的提醒并发送微信订阅消息")
-        except Exception as e:
-            print(f"✗ 启动定时任务调度器失败: {e}")
-            print("  定时任务功能将不可用")
-        
         print("\n按 Ctrl+C 停止服务器")
         print("-" * 60)
         
-        # 等待进程结束
-        process.wait()
+        # 运行服务器（这会阻塞）
+        server.run()
         
     except KeyboardInterrupt:
         print("\n\n收到停止信号，正在关闭服务器...")
-        if process:
-            process.terminate()
         print("服务器已停止")
     except Exception as e:
         print(f"启动服务器时出错: {e}")
+        import traceback
+        traceback.print_exc()
         return False
     
     return True

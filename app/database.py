@@ -195,7 +195,9 @@ def init_database():
         status TEXT DEFAULT 'pending',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_notified TEXT,
-        image_url TEXT,  -- 新增：图片URL字段
+        image_url TEXT,  -- 图片URL字段（兼容旧版本）
+        image_data BYTEA,  -- 新增：图片二进制数据（PostgreSQL使用BYTEA，SQLite使用BLOB）
+        image_type TEXT,   -- 新增：图片类型（如：image/jpeg, image/png）
         FOREIGN KEY (user_id) REFERENCES users (user_id)
     )
     """
@@ -253,6 +255,51 @@ def init_database():
                 logger.info("已添加image_url列到reminders表")
         except Exception as col_error:
             logger.warning(f"检查/添加image_url列失败: {col_error}")
+        
+        # 检查并添加image_data列
+        try:
+            if db_config.db_type == "postgresql":
+                check_image_data_query = """
+                SELECT COUNT(*) as count FROM information_schema.columns 
+                WHERE table_name='reminders' AND column_name='image_data'
+                """
+            else:
+                check_image_data_query = """
+                SELECT COUNT(*) as count FROM pragma_table_info('reminders') WHERE name='image_data'
+                """
+            
+            result = db_config.execute_query(check_image_data_query)
+            if result and result[0].get('count', 0) == 0:
+                # 添加image_data列
+                if db_config.db_type == "postgresql":
+                    add_image_data_query = "ALTER TABLE reminders ADD COLUMN image_data BYTEA"
+                else:
+                    add_image_data_query = "ALTER TABLE reminders ADD COLUMN image_data BLOB"
+                db_config.execute_query(add_image_data_query)
+                logger.info("已添加image_data列到reminders表")
+        except Exception as col_error:
+            logger.warning(f"检查/添加image_data列失败: {col_error}")
+        
+        # 检查并添加image_type列
+        try:
+            if db_config.db_type == "postgresql":
+                check_image_type_query = """
+                SELECT COUNT(*) as count FROM information_schema.columns 
+                WHERE table_name='reminders' AND column_name='image_type'
+                """
+            else:
+                check_image_type_query = """
+                SELECT COUNT(*) as count FROM pragma_table_info('reminders') WHERE name='image_type'
+                """
+            
+            result = db_config.execute_query(check_image_type_query)
+            if result and result[0].get('count', 0) == 0:
+                # 添加image_type列
+                add_image_type_query = "ALTER TABLE reminders ADD COLUMN image_type TEXT"
+                db_config.execute_query(add_image_type_query)
+                logger.info("已添加image_type列到reminders表")
+        except Exception as col_error:
+            logger.warning(f"检查/添加image_type列失败: {col_error}")
         
         # 创建默认用户 "test"（如果不存在）
         create_default_user_query = """
