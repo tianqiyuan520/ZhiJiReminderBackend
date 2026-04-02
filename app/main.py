@@ -261,14 +261,18 @@ async def get_reminders(user_id: str):
                 try:
                     deadline_str = reminder['deadline']
                     # 解析截止时间，假设输入的是北京时间
-                    from datetime import datetime
+                    from datetime import datetime, timezone, timedelta
                     deadline = datetime.strptime(deadline_str, '%Y-%m-%d %H:%M')
                     
-                    # 获取当前时间（使用本地时间，假设是北京时间）
-                    now = datetime.now()
+                    # 获取当前北京时间（UTC+8）
+                    beijing_tz = timezone(timedelta(hours=8))
+                    now = datetime.now(beijing_tz)
+                    
+                    # 移除时区信息进行比较
+                    now_without_tz = now.replace(tzinfo=None)
                     
                     # 直接比较datetime对象
-                    if deadline <= now:
+                    if deadline <= now_without_tz:
                         # 已过期
                         reminder['days_left'] = 0
                         reminder['hours_left'] = 0
@@ -276,7 +280,7 @@ async def get_reminders(user_id: str):
                         reminder['time_left_display'] = "已过期"
                     else:
                         # 计算时间差
-                        diff = deadline - now
+                        diff = deadline - now_without_tz
                         total_seconds = int(diff.total_seconds())
                         
                         # 计算天、小时、分钟
@@ -300,7 +304,7 @@ async def get_reminders(user_id: str):
                             reminder['time_left_display'] = "即将到期"
                         
                         # 添加调试信息
-                        logger.debug(f"时间计算: 现在={now}, 截止={deadline}, 剩余={days}天{hours}小时{minutes}分钟")
+                        logger.debug(f"时间计算: 现在={now_without_tz}, 截止={deadline}, 剩余={days}天{hours}小时{minutes}分钟")
                         
                 except Exception as e:
                     logger.error(f"计算剩余时间错误: {e}, 截止时间字符串: {reminder.get('deadline', '无')}")
@@ -348,6 +352,60 @@ async def get_reminders(user_id: str):
     except Exception as e:
         logger.error(f"查询提醒失败: {e}")
         raise HTTPException(500, f"查询失败: {str(e)}")
+
+@app.put("/api/reminders/{reminder_id}")
+async def update_reminder(reminder_id: str, req: SaveReminderRequest):
+    """更新提醒信息"""
+    # 首先检查提醒是否存在
+    check_query = "SELECT id FROM reminders WHERE id = %s"
+    try:
+        reminders_data = db_config.execute_query(check_query, (reminder_id,))
+        if not reminders_data:
+            raise HTTPException(404, "提醒不存在")
+    except Exception as e:
+        logger.error(f"检查提醒存在失败: {e}")
+        raise HTTPException(500, f"检查失败: {str(e)}")
+    
+    # 更新提醒信息
+    update_query = """
+    UPDATE reminders 
+    SET course = %s, 
+        content = %s, 
+        start_time = %s, 
+        deadline = %s, 
+        difficulty = %s,
+        image_url = %s
+    WHERE id = %s
+    """
+    
+    params = (
+        req.homework.course,
+        req.homework.content,
+        req.homework.start_time,
+        req.homework.deadline,
+        req.homework.difficulty,
+        req.homework.image_url if hasattr(req.homework, 'image_url') else None,
+        reminder_id
+    )
+    
+    try:
+        rowcount = db_config.execute_query(update_query, params)
+        
+        if rowcount == 0:
+            raise HTTPException(404, "提醒不存在或更新失败")
+        
+        logger.info(f"更新任务成功: {reminder_id}, 用户: {req.user_id}")
+        
+        return {
+            "success": True,
+            "message": "任务已更新",
+            "reminder_id": reminder_id
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新任务失败: {e}")
+        raise HTTPException(500, f"更新失败: {str(e)}")
 
 @app.post("/api/reminders/{reminder_id}/complete")
 async def complete_reminder(reminder_id: str):
@@ -456,7 +514,11 @@ async def delete_expired_reminders(user_id: str):
         
         reminders_data = db_config.execute_query(query_select, (user_id,))
         expired_ids = []
-        now = datetime.now()
+        
+        # 获取当前北京时间
+        from datetime import datetime, timezone, timedelta
+        beijing_tz = timezone(timedelta(hours=8))
+        now = datetime.now(beijing_tz).replace(tzinfo=None)  # 移除时区信息
         
         for row in reminders_data:
             task_id = row['id']

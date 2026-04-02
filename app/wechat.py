@@ -121,14 +121,21 @@ class WeChatSubscribeMessage:
         return self.send_subscribe_message(openid, template_id, data)
     
     def _get_urgency_level(self, deadline_str: str) -> str:
-        """根据截止时间计算紧急程度"""
+        """根据截止时间计算紧急程度（使用北京时间）"""
         if not deadline_str:
             return "未知"
         
         try:
+            # 解析截止时间（假设输入的是北京时间）
             deadline = datetime.strptime(deadline_str, '%Y-%m-%d %H:%M')
-            now = datetime.now()
-            time_diff = deadline - now
+            
+            # 获取当前北京时间
+            from datetime import timezone, timedelta
+            beijing_tz = timezone(timedelta(hours=8))
+            now = datetime.now(beijing_tz)
+            
+            # 计算时间差
+            time_diff = deadline - now.replace(tzinfo=None)  # 移除时区信息进行比较
             
             if time_diff.total_seconds() <= 0:
                 return "已过期"
@@ -150,8 +157,8 @@ wechat_message = WeChatSubscribeMessage()
 
 
 def check_due_reminders():
-    """检查即将到期的提醒并发送订阅消息"""
-    logger.info("开始检查即将到期的提醒...")
+    """检查已到期的提醒并发送订阅消息（只在截止时间发送）"""
+    logger.info("开始检查已到期的提醒...")
     
     try:
         # 首先检查last_notified列是否存在
@@ -166,68 +173,44 @@ def check_due_reminders():
             logger.warning("last_notified列不存在，使用简化查询")
             last_notified_exists = False
         
-        # 查询所有待处理且即将到期的提醒
-        # 提前1天、3小时、1小时发送提醒
-        now = datetime.now()
+        # 获取当前北京时间（UTC+8）
+        from datetime import datetime, timedelta, timezone
+        # 创建UTC+8时区
+        beijing_tz = timezone(timedelta(hours=8))
+        now = datetime.now(beijing_tz)
         
         # 构建查询语句（根据列是否存在）
         if last_notified_exists:
-            # 有last_notified列的查询
+            # 有last_notified列的查询 - 只查询当前时间已到期的提醒
             base_query = """
             SELECT r.id, r.user_id, r.course, r.content, r.deadline, u.openid
             FROM reminders r
             JOIN users u ON r.user_id = u.user_id
             WHERE r.status = 'pending' 
-            AND r.deadline BETWEEN %s AND %s
+            AND r.deadline = %s  -- 只检查当前时间
             AND (r.last_notified IS NULL OR r.last_notified < %s)
             """
         else:
-            # 没有last_notified列的简化查询
+            # 没有last_notified列的简化查询 - 只查询当前时间已到期的提醒
             base_query = """
             SELECT r.id, r.user_id, r.course, r.content, r.deadline, u.openid
             FROM reminders r
             JOIN users u ON r.user_id = u.user_id
             WHERE r.status = 'pending' 
-            AND r.deadline BETWEEN %s AND %s
+            AND r.deadline = %s  -- 只检查当前时间
             """
-        
-        # 1天后到期的提醒
-        one_day_later = now + timedelta(days=1)
-        one_day_query = base_query
-        
-        # 3小时后到期的提醒
-        three_hours_later = now + timedelta(hours=3)
-        three_hours_query = base_query
-        
-        # 1小时后到期的提醒
-        one_hour_later = now + timedelta(hours=1)
-        one_hour_query = base_query
         
         # 格式化时间字符串
         time_format = '%Y-%m-%d %H:%M'
         
-        # 检查1天后到期的提醒
-        one_day_start = now.strftime(time_format)
-        one_day_end = one_day_later.strftime(time_format)
-        one_day_params = (one_day_start, one_day_end, now.strftime(time_format)) if last_notified_exists else (one_day_start, one_day_end)
-        one_day_reminders = db_config.execute_query(one_day_query, one_day_params)
+        # 只检查当前时间已到期的提醒
+        now_target = now.strftime(time_format)
+        now_params = (now_target, now.strftime(time_format)) if last_notified_exists else (now_target,)
+        now_reminders = db_config.execute_query(base_query, now_params)
         
-        # 检查3小时后到期的提醒
-        three_hours_start = now.strftime(time_format)
-        three_hours_end = three_hours_later.strftime(time_format)
-        three_hours_params = (three_hours_start, three_hours_end, now.strftime(time_format)) if last_notified_exists else (three_hours_start, three_hours_end)
-        three_hours_reminders = db_config.execute_query(three_hours_query, three_hours_params)
-        
-        # 检查1小时后到期的提醒
-        one_hour_start = now.strftime(time_format)
-        one_hour_end = one_hour_later.strftime(time_format)
-        one_hour_params = (one_hour_start, one_hour_end, now.strftime(time_format)) if last_notified_exists else (one_hour_start, one_hour_end)
-        one_hour_reminders = db_config.execute_query(one_hour_query, one_hour_params)
-        
-        all_reminders = one_day_reminders + three_hours_reminders + one_hour_reminders
         sent_count = 0
         
-        for reminder in all_reminders:
+        for reminder in now_reminders:
             try:
                 reminder_info = {
                     "id": reminder["id"],
