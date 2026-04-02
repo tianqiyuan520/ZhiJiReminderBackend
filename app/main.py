@@ -193,6 +193,41 @@ async def upload_image_only(request_data: dict):
             logger.error(f"图片数据格式错误: {e}")
             raise HTTPException(400, f"图片数据格式错误: {str(e)}")
         
+        # 首先确保用户存在（创建默认用户）
+        try:
+            # 检查用户是否存在
+            check_user_query = "SELECT user_id FROM users WHERE user_id = %s"
+            users_data = db_config.execute_query(check_user_query, (user_id,))
+            
+            if not users_data:
+                # 用户不存在，创建默认用户
+                logger.info(f"用户 {user_id} 不存在，创建默认用户")
+                
+                if db_config.db_type == "postgresql":
+                    create_user_query = """
+                    INSERT INTO users (user_id, openid, nick_name, avatar_url)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (user_id) DO NOTHING
+                    """
+                else:
+                    create_user_query = """
+                    INSERT OR IGNORE INTO users (user_id, openid, nick_name, avatar_url)
+                    VALUES (?, ?, ?, ?)
+                    """
+                
+                user_params = (
+                    user_id,
+                    user_id,  # 使用user_id作为openid
+                    f"用户{user_id[-4:] if len(user_id) >= 4 else user_id}",  # 默认昵称
+                    ""  # 空头像
+                )
+                
+                db_config.execute_query(create_user_query, user_params)
+                logger.info(f"已创建默认用户: {user_id}")
+        except Exception as user_error:
+            logger.warning(f"创建用户失败，继续尝试创建提醒: {user_error}")
+            # 继续尝试创建提醒，如果外键约束失败会抛出异常
+        
         # 生成唯一的提醒ID
         reminder_id = str(uuid.uuid4())
         
@@ -355,7 +390,7 @@ async def create_reminder(req: SaveReminderRequest):
 async def get_reminders(user_id: str):
     """获取某用户的所有提醒"""
     query = """
-    SELECT id, user_id, course, content, start_time, deadline, difficulty, status, created_at, image_url
+    SELECT id, user_id, course, content, start_time, deadline, difficulty, status, created_at, image_url, image_data
     FROM reminders 
     WHERE user_id = %s
     ORDER BY created_at DESC
@@ -380,8 +415,12 @@ async def get_reminders(user_id: str):
                 'image_url': row.get('image_url')
             }
             
-            # 处理图片URL：如果image_url为空，则设置为None
-            if not reminder.get('image_url'):
+            # 处理图片URL：如果有image_data，则使用API URL；否则使用原有的image_url
+            if row.get('image_data'):
+                # 如果有图片数据，使用API URL
+                reminder['image_url'] = f"/api/images/{reminder['id']}"
+            elif not reminder.get('image_url'):
+                # 既没有image_data也没有image_url
                 reminder['image_url'] = None
             
             # 计算剩余时间（天、小时、分钟）- 使用北京时间（UTC+8）
