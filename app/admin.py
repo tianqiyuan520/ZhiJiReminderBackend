@@ -45,48 +45,60 @@ async def management_home(request: Request, auth: bool = Depends(check_admin_aut
         
         # 用户总数
         user_query = "SELECT COUNT(*) as count FROM users"
-        user_result = db_config.execute_query(user_query)
-        if user_result:
-            # 确保结果是标量值，不是字典
-            count_value = user_result[0].get("count", 0)
-            if isinstance(count_value, dict):
-                logger.error(f"用户总数查询返回了字典: {count_value}")
-                stats["user_count"] = 0
-            else:
-                stats["user_count"] = count_value
+        try:
+            user_result = db_config.execute_query(user_query)
+            if user_result:
+                count_value = user_result[0].get("count", 0)
+                # 确保是整数，不是字典
+                if isinstance(count_value, dict):
+                    logger.error(f"用户总数查询返回了字典: {count_value}")
+                    stats["user_count"] = 0
+                else:
+                    stats["user_count"] = int(count_value) if count_value is not None else 0
+        except Exception as e:
+            logger.error(f"查询用户总数失败: {e}")
         
         # 提醒总数
         reminder_query = "SELECT COUNT(*) as count FROM reminders"
-        reminder_result = db_config.execute_query(reminder_query)
-        if reminder_result:
-            count_value = reminder_result[0].get("count", 0)
-            if isinstance(count_value, dict):
-                logger.error(f"提醒总数查询返回了字典: {count_value}")
-                stats["reminder_count"] = 0
-            else:
-                stats["reminder_count"] = count_value
+        try:
+            reminder_result = db_config.execute_query(reminder_query)
+            if reminder_result:
+                count_value = reminder_result[0].get("count", 0)
+                if isinstance(count_value, dict):
+                    logger.error(f"提醒总数查询返回了字典: {count_value}")
+                    stats["reminder_count"] = 0
+                else:
+                    stats["reminder_count"] = int(count_value) if count_value is not None else 0
+        except Exception as e:
+            logger.error(f"查询提醒总数失败: {e}")
         
         # 待处理提醒数
         pending_query = "SELECT COUNT(*) as count FROM reminders WHERE status = 'pending'"
-        pending_result = db_config.execute_query(pending_query)
-        if pending_result:
-            count_value = pending_result[0].get("count", 0)
-            if isinstance(count_value, dict):
-                logger.error(f"待处理提醒数查询返回了字典: {count_value}")
-                stats["pending_count"] = 0
-            else:
-                stats["pending_count"] = count_value
+        try:
+            pending_result = db_config.execute_query(pending_query)
+            if pending_result:
+                count_value = pending_result[0].get("count", 0)
+                if isinstance(count_value, dict):
+                    logger.error(f"待处理提醒数查询返回了字典: {count_value}")
+                    stats["pending_count"] = 0
+                else:
+                    stats["pending_count"] = int(count_value) if count_value is not None else 0
+        except Exception as e:
+            logger.error(f"查询待处理提醒数失败: {e}")
         
         # 已完成提醒数
         completed_query = "SELECT COUNT(*) as count FROM reminders WHERE status = 'completed'"
-        completed_result = db_config.execute_query(completed_query)
-        if completed_result:
-            count_value = completed_result[0].get("count", 0)
-            if isinstance(count_value, dict):
-                logger.error(f"已完成提醒数查询返回了字典: {count_value}")
-                stats["completed_count"] = 0
-            else:
-                stats["completed_count"] = count_value
+        try:
+            completed_result = db_config.execute_query(completed_query)
+            if completed_result:
+                count_value = completed_result[0].get("count", 0)
+                if isinstance(count_value, dict):
+                    logger.error(f"已完成提醒数查询返回了字典: {count_value}")
+                    stats["completed_count"] = 0
+                else:
+                    stats["completed_count"] = int(count_value) if count_value is not None else 0
+        except Exception as e:
+            logger.error(f"查询已完成提醒数失败: {e}")
         
         logger.info(f"管理首页统计信息: {stats}")
         

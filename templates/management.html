@@ -49,7 +49,7 @@
         <header>
             <div class="header-content">
                 <h1>📊 智记侠后台管理系统</h1>
-                <div>数据库: {{ db_info.type if db_info else 'SQLite' }}</div>
+                <div>数据库: {% if db_info and db_info.type %}{{ db_info.type }}{% else %}SQLite{% endif %}</div>
             </div>
         </header>
         
