@@ -94,12 +94,30 @@
                 
             {% elif page == 'users' %}
                 <h2>用户管理</h2>
+                
+                <!-- 批量操作区域 -->
+                <div class="batch-actions" style="background: #e8f4fd; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #b3d7ff;">
+                    <h3 style="margin-bottom: 10px; color: #0056b3;">批量操作</h3>
+                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                        <div style="display: flex; align-items: center; gap: 5px;">
+                            <input type="checkbox" id="select-all-users" onclick="toggleSelectAllUsers(this)">
+                            <label for="select-all-users" style="font-weight: bold;">全选</label>
+                        </div>
+                        <button type="button" class="btn btn-danger" onclick="batchDeleteUsers()" style="background: #dc3545; color: white;">批量删除</button>
+                        <button type="button" class="btn btn-info" onclick="batchExportUsers()" style="background: #17a2b8; color: white;">批量导出</button>
+                        <span id="selected-users-count" style="margin-left: 10px; color: #0056b3; font-weight: bold;">已选择 0 个用户</span>
+                    </div>
+                </div>
+                
                 <p>共 {{ total_count }} 个用户</p>
                 
                 {% if users %}
                     <table>
                         <thead>
                             <tr>
+                                <th style="width: 30px;">
+                                    <input type="checkbox" id="select-all-users-header" onclick="toggleSelectAllUsers(this)">
+                                </th>
                                 <th>用户ID</th>
                                 <th>昵称</th>
                                 <th>注册时间</th>
@@ -109,6 +127,9 @@
                         <tbody>
                             {% for user in users %}
                             <tr>
+                                <td>
+                                    <input type="checkbox" class="user-checkbox" value="{{ user.user_id }}" onchange="updateSelectedUsersCount()">
+                                </td>
                                 <td>{{ user.user_id }}</td>
                                 <td>{{ user.nick_name or '-' }}</td>
                                 <td>{{ user.created_at }}</td>
@@ -139,6 +160,21 @@
             {% elif page == 'reminders' %}
                 <h2>提醒管理</h2>
                 
+                <!-- 批量操作区域 -->
+                <div class="batch-actions" style="background: #e8f4fd; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #b3d7ff;">
+                    <h3 style="margin-bottom: 10px; color: #0056b3;">批量操作</h3>
+                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                        <div style="display: flex; align-items: center; gap: 5px;">
+                            <input type="checkbox" id="select-all" onclick="toggleSelectAll(this)">
+                            <label for="select-all" style="font-weight: bold;">全选</label>
+                        </div>
+                        <button type="button" class="btn btn-warning" onclick="batchComplete()" style="background: #ffc107; color: #212529;">批量完成</button>
+                        <button type="button" class="btn btn-danger" onclick="batchDelete()" style="background: #dc3545; color: white;">批量删除</button>
+                        <button type="button" class="btn btn-info" onclick="batchExport()" style="background: #17a2b8; color: white;">批量导出</button>
+                        <span id="selected-count" style="margin-left: 10px; color: #0056b3; font-weight: bold;">已选择 0 个项目</span>
+                    </div>
+                </div>
+                
                 <div class="filters">
                     <form class="filter-form" method="get" action="/management/reminders">
                         <select name="status" class="filter-input">
@@ -159,6 +195,9 @@
                     <table>
                         <thead>
                             <tr>
+                                <th style="width: 30px;">
+                                    <input type="checkbox" id="select-all-header" onclick="toggleSelectAll(this)">
+                                </th>
                                 <th>ID</th>
                                 <th>用户</th>
                                 <th>课程</th>
@@ -170,6 +209,9 @@
                         <tbody>
                             {% for reminder in reminders %}
                             <tr>
+                                <td>
+                                    <input type="checkbox" class="reminder-checkbox" value="{{ reminder.id }}" onchange="updateSelectedCount()">
+                                </td>
                                 <td title="{{ reminder.id }}">{{ reminder.id[:8] }}...</td>
                                 <td>{{ reminder.user_nick_name or reminder.user_id }}</td>
                                 <td>{{ reminder.course }}</td>
@@ -342,6 +384,214 @@
         // 确认删除
         function confirmDelete(message) {
             return confirm(message || '确定删除吗？');
+        }
+        
+        // 批量操作相关函数
+        function toggleSelectAll(checkbox) {
+            const checkboxes = document.querySelectorAll('.reminder-checkbox');
+            const isChecked = checkbox.checked;
+            checkboxes.forEach(cb => cb.checked = isChecked);
+            updateSelectedCount();
+        }
+        
+        function updateSelectedCount() {
+            const checkboxes = document.querySelectorAll('.reminder-checkbox:checked');
+            const count = checkboxes.length;
+            document.getElementById('selected-count').textContent = `已选择 ${count} 个项目`;
+            
+            // 同步全选复选框状态
+            const allCheckboxes = document.querySelectorAll('.reminder-checkbox');
+            const selectAllCheckbox = document.getElementById('select-all-header');
+            if (selectAllCheckbox) {
+                selectAllCheckbox.checked = allCheckboxes.length > 0 && checkboxes.length === allCheckboxes.length;
+            }
+        }
+        
+        function getSelectedReminderIds() {
+            const checkboxes = document.querySelectorAll('.reminder-checkbox:checked');
+            return Array.from(checkboxes).map(cb => cb.value);
+        }
+        
+        function batchComplete() {
+            const selectedIds = getSelectedReminderIds();
+            if (selectedIds.length === 0) {
+                alert('请先选择要完成的提醒');
+                return;
+            }
+            
+            if (!confirm(`确定要批量完成 ${selectedIds.length} 个提醒吗？`)) {
+                return;
+            }
+            
+            // 发送批量完成请求
+            fetch('/management/reminders/batch-complete', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ reminder_ids: selectedIds })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert(`成功完成 ${data.completed_count} 个提醒`);
+                    location.reload(); // 重新加载页面
+                } else {
+                    alert('批量完成失败: ' + (data.message || '未知错误'));
+                }
+            })
+            .catch(error => {
+                console.error('批量完成错误:', error);
+                alert('批量完成请求失败');
+            });
+        }
+        
+        function batchDelete() {
+            const selectedIds = getSelectedReminderIds();
+            if (selectedIds.length === 0) {
+                alert('请先选择要删除的提醒');
+                return;
+            }
+            
+            if (!confirm(`确定要批量删除 ${selectedIds.length} 个提醒吗？此操作不可恢复！`)) {
+                return;
+            }
+            
+            // 发送批量删除请求
+            fetch('/management/reminders/batch-delete', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ reminder_ids: selectedIds })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert(`成功删除 ${data.deleted_count} 个提醒`);
+                    location.reload(); // 重新加载页面
+                } else {
+                    alert('批量删除失败: ' + (data.message || '未知错误'));
+                }
+            })
+            .catch(error => {
+                console.error('批量删除错误:', error);
+                alert('批量删除请求失败');
+            });
+        }
+        
+        function batchExport() {
+            const selectedIds = getSelectedReminderIds();
+            if (selectedIds.length === 0) {
+                alert('请先选择要导出的提醒');
+                return;
+            }
+            
+            // 创建导出数据
+            const exportData = {
+                reminder_ids: selectedIds,
+                export_time: new Date().toISOString(),
+                count: selectedIds.length
+            };
+            
+            // 创建下载链接
+            const dataStr = JSON.stringify(exportData, null, 2);
+            const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+            const exportFileDefaultName = `reminders_export_${new Date().toISOString().slice(0,10)}.json`;
+            
+            const linkElement = document.createElement('a');
+            linkElement.setAttribute('href', dataUri);
+            linkElement.setAttribute('download', exportFileDefaultName);
+            linkElement.click();
+            
+            alert(`已导出 ${selectedIds.length} 个提醒的ID列表`);
+        }
+        
+        // 用户管理批量操作相关函数
+        function toggleSelectAllUsers(checkbox) {
+            const checkboxes = document.querySelectorAll('.user-checkbox');
+            const isChecked = checkbox.checked;
+            checkboxes.forEach(cb => cb.checked = isChecked);
+            updateSelectedUsersCount();
+        }
+        
+        function updateSelectedUsersCount() {
+            const checkboxes = document.querySelectorAll('.user-checkbox:checked');
+            const count = checkboxes.length;
+            document.getElementById('selected-users-count').textContent = `已选择 ${count} 个用户`;
+            
+            // 同步全选复选框状态
+            const allCheckboxes = document.querySelectorAll('.user-checkbox');
+            const selectAllCheckbox = document.getElementById('select-all-users-header');
+            if (selectAllCheckbox) {
+                selectAllCheckbox.checked = allCheckboxes.length > 0 && checkboxes.length === allCheckboxes.length;
+            }
+        }
+        
+        function getSelectedUserIds() {
+            const checkboxes = document.querySelectorAll('.user-checkbox:checked');
+            return Array.from(checkboxes).map(cb => cb.value);
+        }
+        
+        function batchDeleteUsers() {
+            const selectedIds = getSelectedUserIds();
+            if (selectedIds.length === 0) {
+                alert('请先选择要删除的用户');
+                return;
+            }
+            
+            if (!confirm(`确定要批量删除 ${selectedIds.length} 个用户吗？此操作将同时删除这些用户的所有提醒，且不可恢复！`)) {
+                return;
+            }
+            
+            // 发送批量删除请求
+            fetch('/management/users/batch-delete', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ user_ids: selectedIds })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert(`成功删除 ${data.deleted_count} 个用户`);
+                    location.reload(); // 重新加载页面
+                } else {
+                    alert('批量删除失败: ' + (data.message || '未知错误'));
+                }
+            })
+            .catch(error => {
+                console.error('批量删除用户错误:', error);
+                alert('批量删除用户请求失败');
+            });
+        }
+        
+        function batchExportUsers() {
+            const selectedIds = getSelectedUserIds();
+            if (selectedIds.length === 0) {
+                alert('请先选择要导出的用户');
+                return;
+            }
+            
+            // 创建导出数据
+            const exportData = {
+                user_ids: selectedIds,
+                export_time: new Date().toISOString(),
+                count: selectedIds.length
+            };
+            
+            // 创建下载链接
+            const dataStr = JSON.stringify(exportData, null, 2);
+            const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+            const exportFileDefaultName = `users_export_${new Date().toISOString().slice(0,10)}.json`;
+            
+            const linkElement = document.createElement('a');
+            linkElement.setAttribute('href', dataUri);
+            linkElement.setAttribute('download', exportFileDefaultName);
+            linkElement.click();
+            
+            alert(`已导出 ${selectedIds.length} 个用户的ID列表`);
         }
     </script>
 </body>

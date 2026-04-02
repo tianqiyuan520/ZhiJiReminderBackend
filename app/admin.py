@@ -447,3 +447,144 @@ async def switch_database(
     except Exception as e:
         logger.error(f"切换数据库失败: {e}")
         raise HTTPException(500, f"切换数据库失败: {str(e)}")
+
+
+@router.post("/reminders/batch-complete")
+async def batch_complete_reminders(
+    request: Request,
+    auth: bool = Depends(check_admin_auth)
+):
+    """批量完成提醒"""
+    try:
+        # 获取请求体
+        data = await request.json()
+        reminder_ids = data.get("reminder_ids", [])
+        
+        if not reminder_ids:
+            raise HTTPException(400, "未选择任何提醒")
+        
+        # 批量更新状态为completed
+        if db_config.db_type == "postgresql":
+            # PostgreSQL使用ANY语法
+            query = """
+            UPDATE reminders 
+            SET status = 'completed' 
+            WHERE id = ANY(%s)
+            """
+            params = (reminder_ids,)
+        else:
+            # SQLite使用IN语法
+            placeholders = ",".join(["?" for _ in reminder_ids])
+            query = f"""
+            UPDATE reminders 
+            SET status = 'completed' 
+            WHERE id IN ({placeholders})
+            """
+            params = reminder_ids
+        
+        completed_count = db_config.execute_query(query, params)
+        
+        logger.info(f"批量完成提醒: 共 {completed_count} 个提醒")
+        
+        return {
+            "success": True,
+            "message": f"成功完成 {completed_count} 个提醒",
+            "completed_count": completed_count
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"批量完成提醒失败: {e}")
+        raise HTTPException(500, f"批量完成提醒失败: {str(e)}")
+
+
+@router.post("/reminders/batch-delete")
+async def batch_delete_reminders(
+    request: Request,
+    auth: bool = Depends(check_admin_auth)
+):
+    """批量删除提醒"""
+    try:
+        # 获取请求体
+        data = await request.json()
+        reminder_ids = data.get("reminder_ids", [])
+        
+        if not reminder_ids:
+            raise HTTPException(400, "未选择任何提醒")
+        
+        # 批量删除
+        if db_config.db_type == "postgresql":
+            # PostgreSQL使用ANY语法
+            query = "DELETE FROM reminders WHERE id = ANY(%s)"
+            params = (reminder_ids,)
+        else:
+            # SQLite使用IN语法
+            placeholders = ",".join(["?" for _ in reminder_ids])
+            query = f"DELETE FROM reminders WHERE id IN ({placeholders})"
+            params = reminder_ids
+        
+        deleted_count = db_config.execute_query(query, params)
+        
+        logger.info(f"批量删除提醒: 共 {deleted_count} 个提醒")
+        
+        return {
+            "success": True,
+            "message": f"成功删除 {deleted_count} 个提醒",
+            "deleted_count": deleted_count
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"批量删除提醒失败: {e}")
+        raise HTTPException(500, f"批量删除提醒失败: {str(e)}")
+
+
+@router.post("/users/batch-delete")
+async def batch_delete_users(
+    request: Request,
+    auth: bool = Depends(check_admin_auth)
+):
+    """批量删除用户（同时删除其所有提醒）"""
+    try:
+        # 获取请求体
+        data = await request.json()
+        user_ids = data.get("user_ids", [])
+        
+        if not user_ids:
+            raise HTTPException(400, "未选择任何用户")
+        
+        total_deleted = 0
+        
+        # 对于每个用户，删除其提醒和用户记录
+        for user_id in user_ids:
+            try:
+                # 先删除用户的提醒
+                delete_reminders_query = "DELETE FROM reminders WHERE user_id = %s"
+                reminders_deleted = db_config.execute_query(delete_reminders_query, (user_id,))
+                
+                # 删除用户
+                delete_user_query = "DELETE FROM users WHERE user_id = %s"
+                user_deleted = db_config.execute_query(delete_user_query, (user_id,))
+                
+                if user_deleted > 0:
+                    total_deleted += 1
+                    logger.info(f"删除用户 {user_id} 成功，同时删除了 {reminders_deleted} 个提醒")
+                else:
+                    logger.warning(f"用户 {user_id} 不存在或删除失败")
+                    
+            except Exception as user_error:
+                logger.error(f"删除用户 {user_id} 失败: {user_error}")
+                # 继续处理其他用户
+        
+        logger.info(f"批量删除用户: 共 {total_deleted} 个用户")
+        
+        return {
+            "success": True,
+            "message": f"成功删除 {total_deleted} 个用户",
+            "deleted_count": total_deleted
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"批量删除用户失败: {e}")
+        raise HTTPException(500, f"批量删除用户失败: {str(e)}")

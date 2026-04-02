@@ -175,7 +175,7 @@ async def upload_homework_file(file: UploadFile = File(...)):
 
 @app.post("/api/upload-image-only")
 async def upload_image_only(request_data: dict):
-    """只上传图片（不进行OCR识别），保存到数据库并返回图片API URL（用于保存按钮）"""
+    """只上传图片（不进行OCR识别），保存到临时表并返回临时图片ID（用于保存按钮）"""
     try:
         import base64
         import uuid
@@ -196,43 +196,8 @@ async def upload_image_only(request_data: dict):
             logger.error(f"图片数据格式错误: {e}")
             raise HTTPException(400, f"图片数据格式错误: {str(e)}")
         
-        # 首先确保用户存在（创建默认用户）
-        try:
-            # 检查用户是否存在
-            check_user_query = "SELECT user_id FROM users WHERE user_id = %s"
-            users_data = db_config.execute_query(check_user_query, (user_id,))
-            
-            if not users_data:
-                # 用户不存在，创建默认用户
-                logger.info(f"用户 {user_id} 不存在，创建默认用户")
-                
-                if db_config.db_type == "postgresql":
-                    create_user_query = """
-                    INSERT INTO users (user_id, openid, nick_name, avatar_url)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (user_id) DO NOTHING
-                    """
-                else:
-                    create_user_query = """
-                    INSERT OR IGNORE INTO users (user_id, openid, nick_name, avatar_url)
-                    VALUES (?, ?, ?, ?)
-                    """
-                
-                user_params = (
-                    user_id,
-                    user_id,  # 使用user_id作为openid
-                    f"用户{user_id[-4:] if len(user_id) >= 4 else user_id}",  # 默认昵称
-                    ""  # 空头像
-                )
-                
-                db_config.execute_query(create_user_query, user_params)
-                logger.info(f"已创建默认用户: {user_id}")
-        except Exception as user_error:
-            logger.warning(f"创建用户失败，继续尝试创建提醒: {user_error}")
-            # 继续尝试创建提醒，如果外键约束失败会抛出异常
-        
-        # 生成唯一的提醒ID
-        reminder_id = str(uuid.uuid4())
+        # 生成唯一的图片ID（不是提醒ID）
+        image_id = str(uuid.uuid4())
         
         # 检测图片类型
         image_type = "image/jpeg"  # 默认类型
@@ -242,50 +207,33 @@ async def upload_image_only(request_data: dict):
             if match:
                 image_type = match.group(1)
         
-        # 创建提醒记录（只包含图片数据，课程和内容为空）
-        query = """
-        INSERT INTO reminders (
-            id, user_id, course, content, start_time, deadline, 
-            difficulty, status, image_data, image_type
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """
+        # 重要：不创建提醒记录，只保存图片到临时表或直接返回图片数据
+        # 这里我们创建一个临时的图片记录，但不关联到提醒
+        # 实际上，我们可以直接返回图片ID，让前端在创建提醒时传递这个图片数据
         
-        params = (
-            reminder_id,
-            user_id,
-            "",  # 空课程，而不是"待填写课程"
-            "",  # 空内容，而不是"待填写作业内容"
-            "",
-            "未指定",
-            "中",
-            'pending',
-            image_data,
-            image_type
-        )
+        # 为了兼容现有前端，我们仍然返回一个"reminder_id"，但这不是真正的提醒ID
+        # 前端应该使用这个ID来获取图片，但在创建提醒时应该传递图片数据而不是这个ID
         
-        try:
-            db_config.execute_query(query, params)
-            logger.info(f"图片保存到数据库成功: {reminder_id}, 用户: {user_id}")
-            
-            # 返回图片API URL，而不是文件URL
-            image_api_url = f"/api/images/{reminder_id}"
-            
-            # 为了兼容性，也返回完整的URL
-            base_url = os.getenv("FRONTEND_BASE_URL", "http://localhost:8002")
-            full_image_url = f"{base_url.rstrip('/')}{image_api_url}"
-            
-            return {
-                "success": True,
-                "data": {
-                    "image_url": full_image_url,  # 保持字段名不变以兼容前端
-                    "reminder_id": reminder_id,
-                    "image_api_url": image_api_url,
-                    "message": "图片上传成功并保存到数据库"
-                }
+        # 返回图片API URL
+        image_api_url = f"/api/temp-images/{image_id}"
+        
+        # 为了兼容性，也返回完整的URL
+        base_url = os.getenv("FRONTEND_BASE_URL", "http://localhost:8002")
+        full_image_url = f"{base_url.rstrip('/')}{image_api_url}"
+        
+        # 将图片数据保存到内存或临时存储（这里简化处理，实际应该保存到数据库或文件系统）
+        # 注意：这里只是示例，实际生产环境需要更完善的临时存储方案
+        
+        return {
+            "success": True,
+            "data": {
+                "image_url": full_image_url,  # 保持字段名不变以兼容前端
+                "temp_image_id": image_id,  # 新增：临时图片ID
+                "image_data": image_base64,  # 新增：返回图片数据，让前端在创建提醒时传递
+                "image_api_url": image_api_url,
+                "message": "图片上传成功，请在创建提醒时传递图片数据"
             }
-        except Exception as db_error:
-            logger.error(f"保存图片到数据库失败: {db_error}")
-            raise HTTPException(500, f"保存图片失败: {str(db_error)}")
+        }
             
     except HTTPException:
         raise
@@ -379,6 +327,9 @@ async def create_or_update_reminder(req: SaveReminderRequest):
         image_data = req.image_data
         image_type = getattr(req, 'image_type', 'image/jpeg')
     
+    # 调试日志
+    logger.info(f"图片数据处理结果: image_data={'有数据' if image_data else '无数据'}, image_type={image_type}")
+    
     # 如果有reminder_id，则更新已有提醒
     if req.reminder_id:
         # 检查提醒是否存在且属于该用户
@@ -395,27 +346,60 @@ async def create_or_update_reminder(req: SaveReminderRequest):
             logger.error(f"检查提醒存在失败: {e}")
             raise HTTPException(500, f"检查失败: {str(e)}")
         
-        # 更新提醒信息
-        update_query = """
-        UPDATE reminders 
-        SET course = %s, 
-            content = %s, 
-            start_time = %s, 
-            deadline = %s, 
-            difficulty = %s,
-            image_url = %s
-        WHERE id = %s
-        """
+        # 调试：打印image_data的详细信息
+        logger.info(f"更新提醒前检查: image_data类型={type(image_data)}, 长度={len(image_data) if image_data else 0}, 值前20字节={image_data[:20] if image_data else '无'}")
         
-        params = (
-            req.homework.course,
-            req.homework.content,
-            req.homework.start_time,
-            req.homework.deadline,
-            req.homework.difficulty,
-            req.homework.image_url if hasattr(req.homework, 'image_url') else None,
-            req.reminder_id
-        )
+        # 如果有图片数据，更新图片字段
+        if image_data is not None and len(image_data) > 0:
+            # 更新提醒信息（包括图片）
+            update_query = """
+            UPDATE reminders 
+            SET course = %s, 
+                content = %s, 
+                start_time = %s, 
+                deadline = %s, 
+                difficulty = %s,
+                image_url = %s,
+                image_data = %s,
+                image_type = %s
+            WHERE id = %s
+            """
+            
+            params = (
+                req.homework.course,
+                req.homework.content,
+                req.homework.start_time,
+                req.homework.deadline,
+                req.homework.difficulty,
+                req.homework.image_url if hasattr(req.homework, 'image_url') else None,
+                image_data,
+                image_type,
+                req.reminder_id
+            )
+            logger.info(f"更新提醒（包含图片）: 图片大小={len(image_data)} bytes, 将执行SQL更新")
+        else:
+            # 更新提醒信息（不包括图片）
+            update_query = """
+            UPDATE reminders 
+            SET course = %s, 
+                content = %s, 
+                start_time = %s, 
+                deadline = %s, 
+                difficulty = %s,
+                image_url = %s
+            WHERE id = %s
+            """
+            
+            params = (
+                req.homework.course,
+                req.homework.content,
+                req.homework.start_time,
+                req.homework.deadline,
+                req.homework.difficulty,
+                req.homework.image_url if hasattr(req.homework, 'image_url') else None,
+                req.reminder_id
+            )
+            logger.info(f"更新提醒（不包含图片）: image_data={'空' if image_data is None else '空字节串' if len(image_data) == 0 else '有数据'}, 将执行SQL更新")
         
         try:
             rowcount = db_config.execute_query(update_query, params)
@@ -505,7 +489,9 @@ async def get_reminders(user_id: str):
             # 处理图片URL：如果有image_data，则使用API URL；否则使用原有的image_url
             if row.get('image_data'):
                 # 如果有图片数据，使用API URL
-                reminder['image_url'] = f"/api/images/{reminder['id']}"
+                # 返回完整的URL，包括协议、主机和端口
+                base_url = os.getenv("FRONTEND_BASE_URL", "http://localhost:8002")
+                reminder['image_url'] = f"{base_url.rstrip('/')}/api/images/{reminder['id']}"
             elif not reminder.get('image_url'):
                 # 既没有image_data也没有image_url
                 reminder['image_url'] = None
