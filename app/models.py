@@ -19,6 +19,7 @@ class HomeworkInfo(BaseModel):
 class SaveReminderRequest(BaseModel):
     user_id: str
     homework: HomeworkInfo
+    reminder_id: Optional[str] = None  # 可选：如果提供则更新已有提醒
 
 class UserInfo(BaseModel):
     user_id: str

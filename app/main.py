@@ -303,10 +303,8 @@ async def analyze_homework(homework: HomeworkInfo):
         raise HTTPException(500, f"分析失败: {str(e)}")
 
 @app.post("/api/reminder")
-async def create_reminder(req: SaveReminderRequest):
-    """保存提醒到数据库"""
-    reminder_id = str(uuid.uuid4())
-    
+async def create_or_update_reminder(req: SaveReminderRequest):
+    """保存或更新提醒到数据库"""
     # 首先确保用户存在（创建默认用户）
     try:
         # 检查用户是否存在
@@ -342,7 +340,6 @@ async def create_reminder(req: SaveReminderRequest):
         logger.warning(f"创建用户失败，继续尝试创建提醒: {user_error}")
         # 继续尝试创建提醒，如果外键约束失败会抛出异常
     
-    # 创建提醒（包含image_url和可能的image_data）
     # 检查是否有图片数据需要保存
     image_data = None
     image_type = None
@@ -352,39 +349,99 @@ async def create_reminder(req: SaveReminderRequest):
         image_data = req.image_data
         image_type = getattr(req, 'image_type', 'image/jpeg')
     
-    query = """
-    INSERT INTO reminders (
-        id, user_id, course, content, start_time, deadline, 
-        difficulty, status, image_url, image_data, image_type
-    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """
-    
-    params = (
-        reminder_id,
-        req.user_id,
-        req.homework.course,
-        req.homework.content,
-        req.homework.start_time,
-        req.homework.deadline,
-        req.homework.difficulty,
-        'pending',
-        req.homework.image_url if hasattr(req.homework, 'image_url') else None,
-        image_data,
-        image_type
-    )
-    
-    try:
-        db_config.execute_query(query, params)
-        logger.info(f"创建提醒成功: {reminder_id}, 用户: {req.user_id}")
+    # 如果有reminder_id，则更新已有提醒
+    if req.reminder_id:
+        # 检查提醒是否存在且属于该用户
+        check_reminder_query = """
+        SELECT id FROM reminders 
+        WHERE id = %s AND user_id = %s
+        """
         
-        return {
-            "success": True,
-            "reminder_id": reminder_id,
-            "message": "提醒已创建"
-        }
-    except Exception as e:
-        logger.error(f"创建提醒失败: {e}")
-        raise HTTPException(500, f"保存失败: {str(e)}")
+        try:
+            reminders_data = db_config.execute_query(check_reminder_query, (req.reminder_id, req.user_id))
+            if not reminders_data:
+                raise HTTPException(404, "提醒不存在或不属于该用户")
+        except Exception as e:
+            logger.error(f"检查提醒存在失败: {e}")
+            raise HTTPException(500, f"检查失败: {str(e)}")
+        
+        # 更新提醒信息
+        update_query = """
+        UPDATE reminders 
+        SET course = %s, 
+            content = %s, 
+            start_time = %s, 
+            deadline = %s, 
+            difficulty = %s,
+            image_url = %s
+        WHERE id = %s
+        """
+        
+        params = (
+            req.homework.course,
+            req.homework.content,
+            req.homework.start_time,
+            req.homework.deadline,
+            req.homework.difficulty,
+            req.homework.image_url if hasattr(req.homework, 'image_url') else None,
+            req.reminder_id
+        )
+        
+        try:
+            rowcount = db_config.execute_query(update_query, params)
+            
+            if rowcount == 0:
+                raise HTTPException(404, "提醒不存在或更新失败")
+            
+            logger.info(f"更新提醒成功: {req.reminder_id}, 用户: {req.user_id}")
+            
+            return {
+                "success": True,
+                "reminder_id": req.reminder_id,
+                "message": "提醒已更新"
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"更新提醒失败: {e}")
+            raise HTTPException(500, f"更新失败: {str(e)}")
+    else:
+        # 创建新提醒
+        reminder_id = str(uuid.uuid4())
+        
+        query = """
+        INSERT INTO reminders (
+            id, user_id, course, content, start_time, deadline, 
+            difficulty, status, image_url, image_data, image_type
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        
+        params = (
+            reminder_id,
+            req.user_id,
+            req.homework.course,
+            req.homework.content,
+            req.homework.start_time,
+            req.homework.deadline,
+            req.homework.difficulty,
+            'pending',
+            req.homework.image_url if hasattr(req.homework, 'image_url') else None,
+            image_data,
+            image_type
+        )
+        
+        try:
+            db_config.execute_query(query, params)
+            logger.info(f"创建提醒成功: {reminder_id}, 用户: {req.user_id}")
+            
+            return {
+                "success": True,
+                "reminder_id": reminder_id,
+                "message": "提醒已创建"
+            }
+        except Exception as e:
+            logger.error(f"创建提醒失败: {e}")
+            raise HTTPException(500, f"保存失败: {str(e)}")
 
 @app.get("/api/reminders")
 async def get_reminders(user_id: str):
