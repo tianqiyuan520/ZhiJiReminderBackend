@@ -20,23 +20,45 @@ class WeChatSubscribeMessage:
     
     def __init__(self):
         import os
-        
-        # 微信小程序配置（从环境变量获取）
-        self.app_id = os.getenv("WECHAT_APP_ID", "wx1234567890abcdef")  # 微信小程序AppID
-        self.app_secret = os.getenv("WECHAT_APP_SECRET", "your_app_secret_here")  # 微信小程序AppSecret
+        self._os = os
         self.access_token = None
         self.token_expire_time = 0
         
-        # 订阅消息模板ID（从环境变量获取）
-        self.template_ids = {
-            "reminder_due": os.getenv("WECHAT_TEMPLATE_REMINDER_DUE", "SmeggOOCYnQ8841WNG5w9eeiZWYGMzGfOBCEEJpH9_8"),
-            "reminder_urgent": os.getenv("WECHAT_TEMPLATE_REMINDER_URGENT", "SmeggOOCYnQ8841WNG5w9eeiZWYGMzGfOBCEEJpH9_8"),
-        }
-        
-        # 检查配置
-        if self.app_id == "wx1234567890abcdef" or self.app_secret == "your_app_secret_here":
-            logger.warning("微信配置未设置，订阅消息功能将无法正常工作")
-            logger.warning("请设置环境变量：WECHAT_APP_ID, WECHAT_APP_SECRET")
+        # 延迟加载配置
+        self._app_id = None
+        self._app_secret = None
+        self._template_ids = None
+    
+    @property
+    def app_id(self):
+        """获取微信小程序AppID"""
+        if self._app_id is None:
+            self._app_id = self._os.getenv("WECHAT_APP_ID", "wx1234567890abcdef")
+            # 检查配置
+            if self._app_id == "wx1234567890abcdef":
+                logger.warning("微信配置未设置，订阅消息功能将无法正常工作")
+                logger.warning("请设置环境变量：WECHAT_APP_ID")
+        return self._app_id
+    
+    @property
+    def app_secret(self):
+        """获取微信小程序AppSecret"""
+        if self._app_secret is None:
+            self._app_secret = self._os.getenv("WECHAT_APP_SECRET", "your_app_secret_here")
+            # 检查配置
+            if self._app_secret == "your_app_secret_here":
+                logger.warning("请设置环境变量：WECHAT_APP_SECRET")
+        return self._app_secret
+    
+    @property
+    def template_ids(self):
+        """获取订阅消息模板ID"""
+        if self._template_ids is None:
+            self._template_ids = {
+                "reminder_due": self._os.getenv("WECHAT_TEMPLATE_REMINDER_DUE", "SmeggOOCYnQ8841WNG5w9eeiZWYGMzGfOBCEEJpH9_8"),
+                "reminder_urgent": self._os.getenv("WECHAT_TEMPLATE_REMINDER_URGENT", "SmeggOOCYnQ8841WNG5w9eeiZWYGMzGfOBCEEJpH9_8"),
+            }
+        return self._template_ids
     
     def get_access_token(self) -> Optional[str]:
         """获取微信Access Token"""
