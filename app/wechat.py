@@ -9,8 +9,11 @@ import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import requests
+from dotenv import load_dotenv
 
 from app.database import db_config
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +31,7 @@ class WeChatSubscribeMessage:
         self._app_id = None
         self._app_secret = None
         self._template_ids = None
+        self._default_page = None
     
     @property
     def app_id(self):
@@ -59,6 +63,14 @@ class WeChatSubscribeMessage:
                 "reminder_urgent": self._os.getenv("WECHAT_TEMPLATE_REMINDER_URGENT", "SmeggOOCYnQ8841WNG5w9eeiZWYGMzGfOBCEEJpH9_8"),
             }
         return self._template_ids
+
+    @property
+    def default_page(self) -> Optional[str]:
+        """获取订阅消息跳转路径，未配置时不传 page。"""
+        if self._default_page is None:
+            page = self._os.getenv("WECHAT_SUBSCRIBE_PAGE", "").strip()
+            self._default_page = page or None
+        return self._default_page
     
     def get_access_token(self) -> Optional[str]:
         """获取微信Access Token"""
@@ -85,8 +97,8 @@ class WeChatSubscribeMessage:
             logger.error(f"获取微信Access Token异常: {e}")
             return None
     
-    def send_subscribe_message(self, openid: str, template_id: str, data: Dict, 
-                              page: str = "pages/reminder/reminder") -> bool:
+    def send_subscribe_message(self, openid: str, template_id: str, data: Dict,
+                              page: Optional[str] = None) -> bool:
         """发送订阅消息"""
         access_token = self.get_access_token()
         if not access_token:
@@ -98,9 +110,11 @@ class WeChatSubscribeMessage:
         payload = {
             "touser": openid,
             "template_id": template_id,
-            "page": page,
             "data": data
         }
+        target_page = page if page is not None else self.default_page
+        if target_page:
+            payload["page"] = target_page
         
         try:
             response = requests.post(url, json=payload, timeout=10)
@@ -210,7 +224,9 @@ def check_due_reminders():
             JOIN users u ON r.user_id = u.user_id
             WHERE r.status = 'pending' 
             AND r.deadline <= %s  -- 检查所有已到期的提醒
-            AND (r.last_notified IS NULL OR r.last_notified < %s)
+            AND (r.last_notified IS NULL OR r.last_notified = '')
+            AND u.openid IS NOT NULL
+            AND u.openid <> ''
             """
         else:
             # 没有last_notified列的简化查询 - 查询所有已到期的提醒
@@ -220,6 +236,8 @@ def check_due_reminders():
             JOIN users u ON r.user_id = u.user_id
             WHERE r.status = 'pending' 
             AND r.deadline <= %s  -- 检查所有已到期的提醒
+            AND u.openid IS NOT NULL
+            AND u.openid <> ''
             """
         
         # 格式化时间字符串
@@ -227,7 +245,7 @@ def check_due_reminders():
         
         # 只检查当前时间已到期的提醒
         now_target = now.strftime(time_format)
-        now_params = (now_target, now.strftime(time_format)) if last_notified_exists else (now_target,)
+        now_params = (now_target,)
         now_reminders = db_config.execute_query(base_query, now_params)
         
         sent_count = 0
@@ -275,7 +293,7 @@ def add_last_notified_column():
     try:
         # 检查列是否存在（SQLite和PostgreSQL语法不同）
         if db_config.db_type == "sqlite":
-            check_query = "PRAGMA table_info(reminders)"
+            check_query = "SELECT name FROM pragma_table_info('reminders')"
             columns = db_config.execute_query(check_query)
             # 安全地提取列名，处理可能的键大小写问题
             column_names = []

@@ -91,13 +91,8 @@ class ReminderScheduler:
 
 def start_scheduler():
     """启动定时任务调度器（用于应用启动时调用）"""
-    # 根据环境配置检查间隔
-    # 开发环境：每1分钟检查一次（用于测试）
-    # 生产环境：每10分钟检查一次
     import os
-    is_production = os.environ.get("RENDER", "").lower() == "true"
-    # check_interval = 10 if is_production else 1  # 开发环境改为1分钟
-    check_interval = 1
+    check_interval = int(os.environ.get("REMINDER_CHECK_INTERVAL_MINUTES", "1"))
     scheduler = ReminderScheduler(check_interval_minutes=check_interval)
     scheduler.start()
     return scheduler

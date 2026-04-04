@@ -17,6 +17,8 @@ from app.ocr import ocr_image
 from app.llm import parse_homework_info, analyze_homework as analyze_homework_ai
 from app.database import db_config, init_database, get_db, close_db
 from app.admin import router as admin_router
+from app.scheduler import init_scheduler, stop_scheduler
+from app.wechat import check_due_reminders, add_last_notified_column
 
 # 配置日志
 import os
@@ -61,13 +63,32 @@ app.mount("/images", StaticFiles(directory=images_dir), name="images")
 # 注册管理路由
 app.include_router(admin_router)
 
+
+def _normalize_openid(openid: str | None) -> str | None:
+    """Normalize blank openid values to None."""
+    if openid is None:
+        return None
+
+    normalized = openid.strip()
+    return normalized or None
+
 # 在应用启动时初始化数据库
 @app.on_event("startup")
 async def startup_event():
     """应用启动时初始化数据库"""
     logger.info("应用启动，初始化数据库...")
     init_database()
+    add_last_notified_column()
+    init_scheduler()
     logger.info("数据库初始化完成")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Stop background jobs and close database connections."""
+    logger.info("应用关闭，停止调度器并关闭数据库连接")
+    stop_scheduler()
+    close_db()
 
 @app.post("/api/upload")
 async def upload_homework_base64(request: dict):
@@ -280,7 +301,7 @@ async def create_or_update_reminder(req: SaveReminderRequest):
             
             user_params = (
                 req.user_id,
-                req.user_id,  # 使用user_id作为openid
+                None,
                 f"用户{req.user_id[-4:]}",  # 默认昵称
                 ""  # 空头像
             )
@@ -886,6 +907,14 @@ async def delete_reminder(reminder_id: str):
 @app.post("/api/user")
 async def save_user(user_info: UserInfo):
     """保存或更新用户信息"""
+    normalized_openid = _normalize_openid(user_info.openid)
+    existing_user = db_config.execute_query(
+        "SELECT openid FROM users WHERE user_id = %s",
+        (user_info.user_id,)
+    )
+    existing_openid = existing_user[0].get("openid") if existing_user else None
+    effective_openid = normalized_openid if normalized_openid is not None else existing_openid
+
     # 根据数据库类型使用不同的语法
     if db_config.db_type == "postgresql":
         # PostgreSQL的UPSERT语法
@@ -906,7 +935,7 @@ async def save_user(user_info: UserInfo):
     
     params = (
         user_info.user_id,
-        user_info.openid or user_info.user_id,
+        effective_openid,
         user_info.nick_name,
         user_info.avatar_url
     )
@@ -952,12 +981,6 @@ async def get_user(user_id: str):
 async def get_hello():
     return "智记侠API服务运行中"
 
-
-# 导入微信订阅消息模块
-from app.wechat import check_due_reminders, add_last_notified_column
-
-# 添加last_notified列（如果不存在）
-add_last_notified_column()
 
 @app.get("/api/check-due-reminders")
 async def api_check_due_reminders():

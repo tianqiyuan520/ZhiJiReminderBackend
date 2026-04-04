@@ -19,5 +19,7 @@ services:
         value: postgresql://zhi_ji_xia_user:biPoDHMdRoOoqQUrLFD7zIiZKolhxop7@dpg-d76cfmhaae7s73c21lig-a/zhi_ji_xia
       - key: POSTGRES_EXTERNAL_URL
         value: postgresql://zhi_ji_xia_user:biPoDHMdRoOoqQUrLFD7zIiZKolhxop7@dpg-d76cfmhaae7s73c21lig-a.singapore-postgres.render.com/zhi_ji_xia
+      - key: REMINDER_CHECK_INTERVAL_MINUTES
+        value: 1
     healthCheckPath: /
     autoDeploy: true
